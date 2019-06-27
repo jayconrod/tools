@@ -275,7 +275,7 @@ func checkoutAndLoad(repo fakemodfetch.Repo, version, scratchDir string) ([]*pac
 		return nil, err
 	}
 
-	loadMode := packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes
+	loadMode := packages.NeedName | packages.NeedTypes | packages.NeedImports | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes
 	cfg := &packages.Config{
 		Mode: loadMode,
 		Dir:  dir,
@@ -285,6 +285,21 @@ func checkoutAndLoad(repo fakemodfetch.Repo, version, scratchDir string) ([]*pac
 		return nil, err
 	}
 	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].PkgPath < pkgs[j].PkgPath })
+
+	// Trim scratchDir from file paths in errors.
+	prefix := dir + string(os.PathSeparator)
+	for _, pkg := range pkgs {
+		for i := range pkg.Errors {
+			pos := pkg.Errors[i].Pos
+			if j := strings.IndexByte(pos, ':'); j >= 0 {
+				file := pos[:j]
+				if strings.HasPrefix(file, prefix) {
+					pkg.Errors[i].Pos = file[len(prefix):] + pos[j:]
+				}
+			}
+		}
+	}
+
 	return pkgs, nil
 }
 
