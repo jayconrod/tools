@@ -136,7 +136,7 @@ func runRelease(cmd *base.Command, args []string) {
 	codeRoot := modPath
 
 	// Check out the old and new versions to temporary directories.
-	code, err := codehost.LocalGitRepo(repoRoot)
+	code, err := codehost.LocalGitRepo(filepath.Join(repoRoot, ".git"))
 	if err != nil {
 		base.Fatalf("go release: %v", err)
 	}
