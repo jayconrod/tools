@@ -151,39 +151,21 @@ func runRelease(cmd *base.Command, args []string) {
 	}
 	defer os.RemoveAll(scratchDir)
 
-	oldDir, err := fakemodfetch.Checkout(repo, *oldVersion, scratchDir)
+	oldPkgs, err := checkoutAndLoad(repo, *oldVersion, scratchDir)
 	if err != nil {
 		base.Fatalf("go release: %v", err)
 	}
-	newDir, err := fakemodfetch.Checkout(repo, *newVersion, scratchDir)
+	newPkgs, err := checkoutAndLoad(repo, *newVersion, scratchDir)
 	if err != nil {
 		base.Fatalf("go release: %v", err)
 	}
-
-	// Load packages from each version.
-	loadMode := packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes
-	oldCfg := &packages.Config{
-		Mode: loadMode,
-		Dir:  oldDir,
-	}
-	oldPkgs, err := packages.Load(oldCfg, "./...")
-	if err != nil {
-		base.Fatalf("go release: %v", err)
-	}
-	sort.Slice(oldPkgs, func(i, j int) bool { return oldPkgs[i].PkgPath < oldPkgs[j].PkgPath })
-	newCfg := &packages.Config{
-		Mode: loadMode,
-		Dir:  newDir,
-	}
-	newPkgs, err := packages.Load(newCfg, "./...")
-	if err != nil {
-		base.Fatalf("go release: %v", err)
-	}
-	sort.Slice(newPkgs, func(i, j int) bool { return newPkgs[i].PkgPath < newPkgs[j].PkgPath })
 
 	// Compare each pair of packages.
 	oldIndex, newIndex := 0, 0
-	var r report
+	r := report{
+		oldVersion: *oldVersion,
+		newVersion: *newVersion,
+	}
 	for oldIndex < len(oldPkgs) || newIndex < len(newPkgs) {
 		if oldIndex < len(oldPkgs) && (newIndex == len(newPkgs) || oldPkgs[oldIndex].PkgPath < newPkgs[newIndex].PkgPath) {
 			r.packages = append(r.packages, packageReport{
@@ -210,10 +192,15 @@ func runRelease(cmd *base.Command, args []string) {
 		} else {
 			oldPkg := oldPkgs[oldIndex]
 			newPkg := newPkgs[newIndex]
-			r.packages = append(r.packages, packageReport{
-				path:   oldPkg.PkgPath,
-				Report: apidiff.Changes(oldPkg.Types, newPkg.Types),
-			})
+			pr := packageReport{
+				path:      oldPkg.PkgPath,
+				oldErrors: oldPkg.Errors,
+				newErrors: newPkg.Errors,
+			}
+			if len(oldPkg.Errors) == 0 && len(newPkg.Errors) == 0 {
+				pr.Report = apidiff.Changes(oldPkg.Types, newPkg.Types)
+			}
+			r.packages = append(r.packages, pr)
 			oldIndex++
 			newIndex++
 		}
@@ -280,23 +267,75 @@ func dirMajorSuffix(path string) string {
 	return path[i-1:]
 }
 
+func checkoutAndLoad(repo fakemodfetch.Repo, version, scratchDir string) ([]*packages.Package, error) {
+	// TODO: ensure a go.mod is present, even if one was not present
+	// in the original version. Without this, we won't be able to load packages.
+	dir, err := fakemodfetch.Checkout(repo, version, scratchDir)
+	if err != nil {
+		return nil, err
+	}
+
+	loadMode := packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes
+	cfg := &packages.Config{
+		Mode: loadMode,
+		Dir:  dir,
+	}
+	pkgs, err := packages.Load(cfg, "./...")
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].PkgPath < pkgs[j].PkgPath })
+	return pkgs, nil
+}
+
 type report struct {
-	packages []packageReport
+	packages               []packageReport
+	oldVersion, newVersion string
 }
 
 func (r *report) Text(w io.Writer) error {
+	// TODO: this would be more readable as a template. We'd also have
+	// more control over apidiff output.
 	for _, p := range r.packages {
-		if len(p.Changes) == 0 {
+		if len(p.Changes) == 0 && len(p.oldErrors) == 0 && len(p.newErrors) == 0 {
 			continue
 		}
 		if _, err := fmt.Fprintf(w, "%s\n%s\n", p.path, strings.Repeat("-", len(p.path))); err != nil {
 			return err
 		}
-		if err := p.Text(w); err != nil {
-			return err
+		if len(p.oldErrors) > 0 {
+			if _, err := fmt.Fprintf(w, "errors in old version %s:\n", r.oldVersion); err != nil {
+				return err
+			}
+			for _, e := range p.oldErrors {
+				if _, err := fmt.Fprintf(w, "\t%v\n", e); err != nil {
+					return err
+				}
+			}
+			if _, err := w.Write([]byte("\n")); err != nil {
+				return err
+			}
 		}
-		if _, err := w.Write([]byte("\n")); err != nil {
-			return err
+		if len(p.newErrors) > 0 {
+			if _, err := fmt.Fprintf(w, "errors in new version %s\n", r.newVersion); err != nil {
+				return err
+			}
+			for _, e := range p.newErrors {
+				if _, err := fmt.Fprintf(w, "\t%v\n", e); err != nil {
+					return err
+				}
+			}
+			if _, err := w.Write([]byte("\n")); err != nil {
+				return err
+			}
+		}
+		if len(p.Changes) > 0 {
+			if err := p.Text(w); err != nil {
+				return err
+			}
+			if _, err := w.Write([]byte("\n")); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -304,5 +343,6 @@ func (r *report) Text(w io.Writer) error {
 
 type packageReport struct {
 	apidiff.Report
-	path string
+	path                 string
+	oldErrors, newErrors []packages.Error
 }
