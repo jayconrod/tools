@@ -3,14 +3,13 @@
 package cfg
 
 const DefaultPkgConfig = `pkg-config`
-
 func DefaultCC(goos, goarch string) string {
-	switch goos + `/` + goarch {
+	switch goos+`/`+goarch {
 	}
 	return "clang"
 }
 func DefaultCXX(goos, goarch string) string {
-	switch goos + `/` + goarch {
+	switch goos+`/`+goarch {
 	}
 	return "clang++"
 }

@@ -1,4 +1,4 @@
-// Copyright 2019 The Go Authors. All rights reserved.
+// Copyright 2018 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -131,4 +131,43 @@ func Unzip(dir, zipfile, prefix string, maxSize int64) error {
 	}
 
 	return nil
+}
+
+// makeDirsReadOnly makes a best-effort attempt to remove write permissions for dir
+// and its transitive contents.
+func makeDirsReadOnly(dir string) {
+	type pathMode struct {
+		path string
+		mode os.FileMode
+	}
+	var dirs []pathMode // in lexical order
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && info.Mode()&0222 != 0 {
+			if info.IsDir() {
+				dirs = append(dirs, pathMode{path, info.Mode()})
+			}
+		}
+		return nil
+	})
+
+	// Run over list backward to chmod children before parents.
+	for i := len(dirs) - 1; i >= 0; i-- {
+		os.Chmod(dirs[i].path, dirs[i].mode&^0222)
+	}
+}
+
+// RemoveAll removes a directory written by Download or Unzip, first applying
+// any permission changes needed to do so.
+func RemoveAll(dir string) error {
+	// Module cache has 0555 directories; make them writable in order to remove content.
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // ignore errors walking in file system
+		}
+		if info.IsDir() {
+			os.Chmod(path, 0777)
+		}
+		return nil
+	})
+	return os.RemoveAll(dir)
 }

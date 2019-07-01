@@ -1,20 +1,19 @@
-// Copyright 2019 The Go Authors. All rights reserved.
+// Copyright 2018 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package modfetch is a modified, partial copy of cmd/go/internal/modfetch.
-// Its API is similar so that gorelease can be integrated easily into
-// cmd/go in the future. However, it avoids a lot of complexity and
-// dependencies of the real modfetch package.
 package fakemodfetch
 
 import (
 	"io"
+	"os"
 	"sort"
 	"time"
 
 	"golang.org/x/tools/internal/gorelease/internal/semver"
 )
+
+const traceRepo = false // trace all repo actions, for debugging
 
 // A Repo represents a repository storing all versions of a single module.
 // It must be safe for simultaneous use by multiple goroutines.
@@ -64,4 +63,14 @@ func SortVersions(list []string) {
 		}
 		return list[i] < list[j]
 	})
+}
+
+// A notExistError is like os.ErrNotExist, but with a custom message
+type notExistError string
+
+func (e notExistError) Error() string {
+	return string(e)
+}
+func (notExistError) Is(target error) bool {
+	return target == os.ErrNotExist
 }
