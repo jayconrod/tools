@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -58,6 +59,12 @@ func main() {
 		os.Exit(0)
 	}
 
+	CmdRelease.Flag.Parse(os.Args[1:])
+	CmdRelease.Run(CmdRelease, CmdRelease.Flag.Args())
+	base.Exit()
+}
+
+func initEnv() {
 	// Set environment (GOOS, GOARCH, etc) explicitly.
 	// In theory all the commands we invoke should have
 	// the same default computation of these as we do,
@@ -72,10 +79,6 @@ func main() {
 	}
 
 	cfg.ModulesEnabled = true
-
-	CmdRelease.Flag.Parse(os.Args[1:])
-	CmdRelease.Run(CmdRelease, CmdRelease.Flag.Args())
-	base.Exit()
 }
 
 func runRelease(cmd *base.Command, args []string) {
@@ -88,26 +91,36 @@ func runRelease(cmd *base.Command, args []string) {
 	if *newVersion == "" {
 		base.Fatalf("go release: -new not set")
 	}
-	if *oldVersion == *newVersion {
-		base.Fatalf("go release: -old and -new must be different versions")
-	}
-
-	// Locate the module root and repository root directories.
 	wd, err := os.Getwd()
 	if err != nil {
 		base.Fatalf("go release: %v", err)
 	}
-	modRoot := findModuleRoot(wd)
-	if modRoot == "" {
-		base.Fatalf("go release: could not find go.mod in any parent directory of %s", wd)
-	}
-	repoRoot, err := findRepoRoot(wd)
+	report, err := makeReleaseReport(wd, *oldVersion, *newVersion)
 	if err != nil {
 		base.Fatalf("go release: %v", err)
 	}
+	if err := report.Text(os.Stdout); err != nil {
+		base.Fatalf("go release: %v", err)
+	}
+}
+
+func makeReleaseReport(dir, oldVersion, newVersion string) (report, error) {
+	if oldVersion == newVersion {
+		return report{}, errors.New("-old and -new must be different versions")
+	}
+
+	// Locate the module root and repository root directories.
+	modRoot := findModuleRoot(dir)
+	if modRoot == "" {
+		return report{}, fmt.Errorf("could not find go.mod in any parent directory of %s", dir)
+	}
+	repoRoot, err := findRepoRoot(dir)
+	if err != nil {
+		return report{}, err
+	}
 
 	if !str.HasFilePathPrefix(modRoot, repoRoot) {
-		base.Fatalf("go release: module root directory %q is not in repository root directory %q", modRoot, repoRoot)
+		return report{}, fmt.Errorf("module directory %q is not in repository root directory %q", modRoot, repoRoot)
 	}
 	subdir := ""
 	if modRoot != repoRoot {
@@ -115,7 +128,7 @@ func runRelease(cmd *base.Command, args []string) {
 	}
 	if subdir != "" {
 		// TODO: implement
-		base.Fatalf("go release: submodules not implemented")
+		return report{}, errors.New("submodules not implemented")
 	}
 
 	// Read the module path from the go.mod file.
@@ -123,14 +136,14 @@ func runRelease(cmd *base.Command, args []string) {
 	goModPath := filepath.Join(modRoot, "go.mod")
 	modData, err := ioutil.ReadFile(goModPath)
 	if err != nil {
-		base.Fatalf("go release: %v", err)
+		return report{}, err
 	}
 	modFile, err := modfile.ParseLax(goModPath, modData, nil)
 	if err != nil {
-		base.Fatalf("go release: %v", err)
+		return report{}, err
 	}
 	if modFile.Module == nil {
-		base.Fatalf("go release: no module statement in %s", goModPath)
+		return report{}, fmt.Errorf("no module statement in %s", goModPath)
 	}
 	modPath := modFile.Module.Mod.Path
 	codeRoot := modPath
@@ -138,33 +151,33 @@ func runRelease(cmd *base.Command, args []string) {
 	// Check out the old and new versions to temporary directories.
 	code, err := codehost.LocalGitRepo(filepath.Join(repoRoot, ".git"))
 	if err != nil {
-		base.Fatalf("go release: %v", err)
+		return report{}, err
 	}
 	repo, err := fakemodfetch.NewCodeRepo(code, codeRoot, modPath)
 	if err != nil {
-		base.Fatalf("go release: %v", err)
+		return report{}, err
 	}
 
 	scratchDir, err := ioutil.TempDir("", "gorelease-")
 	if err != nil {
-		base.Fatalf("go release: %v", err)
+		return report{}, err
 	}
 	defer os.RemoveAll(scratchDir)
 
-	oldPkgs, err := checkoutAndLoad(repo, *oldVersion, scratchDir)
+	oldPkgs, err := checkoutAndLoad(repo, oldVersion, scratchDir)
 	if err != nil {
-		base.Fatalf("go release: %v", err)
+		return report{}, err
 	}
-	newPkgs, err := checkoutAndLoad(repo, *newVersion, scratchDir)
+	newPkgs, err := checkoutAndLoad(repo, newVersion, scratchDir)
 	if err != nil {
-		base.Fatalf("go release: %v", err)
+		return report{}, err
 	}
 
 	// Compare each pair of packages.
 	oldIndex, newIndex := 0, 0
 	r := report{
-		oldVersion: *oldVersion,
-		newVersion: *newVersion,
+		oldVersion: oldVersion,
+		newVersion: newVersion,
 	}
 	for oldIndex < len(oldPkgs) || newIndex < len(newPkgs) {
 		if oldIndex < len(oldPkgs) && (newIndex == len(newPkgs) || oldPkgs[oldIndex].PkgPath < newPkgs[newIndex].PkgPath) {
@@ -172,18 +185,18 @@ func runRelease(cmd *base.Command, args []string) {
 				path: oldPkgs[oldIndex].PkgPath,
 				Report: apidiff.Report{
 					Changes: []apidiff.Change{{
-						Message:    fmt.Sprintf("%s: package removed", oldPkgs[oldIndex].PkgPath),
+						Message:    "package added",
 						Compatible: false,
 					}},
 				},
 			})
 			oldIndex++
-		} else if newIndex < len(newPkgs) && (oldIndex == len(newPkgs) || newPkgs[newIndex].PkgPath < oldPkgs[oldIndex].PkgPath) {
+		} else if newIndex < len(newPkgs) && (oldIndex == len(oldPkgs) || newPkgs[newIndex].PkgPath < oldPkgs[oldIndex].PkgPath) {
 			r.packages = append(r.packages, packageReport{
 				path: newPkgs[newIndex].PkgPath,
 				Report: apidiff.Report{
 					Changes: []apidiff.Change{{
-						Message:    fmt.Sprintf("%s: package added", newPkgs[newIndex].PkgPath),
+						Message:    "package added",
 						Compatible: true,
 					}},
 				},
@@ -206,7 +219,7 @@ func runRelease(cmd *base.Command, args []string) {
 		}
 	}
 
-	r.Text(os.Stdout)
+	return r, nil
 }
 
 func printHelp() {
