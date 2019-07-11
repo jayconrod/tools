@@ -6,13 +6,10 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
+source repo_functions.bash
 
 # Create the repository
-rm -rf basic
-mkdir basic
-cd basic
-git init
-go mod init example.com/basic
+repo_create basic
 
 # Initial commit: simple package
 mkdir a
@@ -65,6 +62,4 @@ git commit -m 'incompatible change'
 git tag incompatible
 
 # Package the repository
-cd ..
-zip -r basic.zip basic
-rm -rf basic
+repo_pack basic

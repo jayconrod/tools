@@ -25,6 +25,18 @@ import (
 	"golang.org/x/tools/internal/apidiff"
 )
 
+// TODO:
+// * Rename "old" to "base".
+// * Base version should be any tag, branch, or commit. We should not require
+//   submodule prefixes for tags that look like semantic versions, but we
+//   also should not automatically use semantic versions from the root module.
+// * Rename "new" to "version". When specified, we check whether that version
+//   is valid.
+// * Tolerate not having a go.mod file.
+// * Print tag, including submodule prefix.
+// * Positional arguments should specify which packages to check. Without
+//   these, we check all non-internal packages in the module.
+
 var CmdRelease = &base.Command{
 	UsageLine: "gorelease [-old version] [-new version]",
 	Short:     "Check for common problems before releasing a new version of a module",
@@ -104,23 +116,23 @@ func runRelease(cmd *base.Command, args []string) {
 	}
 }
 
-func makeReleaseReport(dir, oldVersion, newVersion string) (report, error) {
+func makeReleaseReport(dir, oldVersion, newVersion string) (Report, error) {
 	if oldVersion == newVersion {
-		return report{}, errors.New("-old and -new must be different versions")
+		return Report{}, errors.New("-old and -new must be different versions")
 	}
 
 	// Locate the module root and repository root directories.
 	modRoot := findModuleRoot(dir)
 	if modRoot == "" {
-		return report{}, fmt.Errorf("could not find go.mod in any parent directory of %s", dir)
+		return Report{}, fmt.Errorf("could not find go.mod in any parent directory of %s", dir)
 	}
 	repoRoot, err := findRepoRoot(dir)
 	if err != nil {
-		return report{}, err
+		return Report{}, err
 	}
 
 	if !str.HasFilePathPrefix(modRoot, repoRoot) {
-		return report{}, fmt.Errorf("module directory %q is not in repository root directory %q", modRoot, repoRoot)
+		return Report{}, fmt.Errorf("module directory %q is not in repository root directory %q", modRoot, repoRoot)
 	}
 	subdir := ""
 	if modRoot != repoRoot {
@@ -128,7 +140,7 @@ func makeReleaseReport(dir, oldVersion, newVersion string) (report, error) {
 	}
 	if subdir != "" {
 		// TODO: implement
-		return report{}, errors.New("submodules not implemented")
+		return Report{}, errors.New("submodules not implemented")
 	}
 
 	// Read the module path from the go.mod file.
@@ -136,14 +148,14 @@ func makeReleaseReport(dir, oldVersion, newVersion string) (report, error) {
 	goModPath := filepath.Join(modRoot, "go.mod")
 	modData, err := ioutil.ReadFile(goModPath)
 	if err != nil {
-		return report{}, err
+		return Report{}, err
 	}
 	modFile, err := modfile.ParseLax(goModPath, modData, nil)
 	if err != nil {
-		return report{}, err
+		return Report{}, err
 	}
 	if modFile.Module == nil {
-		return report{}, fmt.Errorf("no module statement in %s", goModPath)
+		return Report{}, fmt.Errorf("no module statement in %s", goModPath)
 	}
 	modPath := modFile.Module.Mod.Path
 	codeRoot := modPath
@@ -151,49 +163,51 @@ func makeReleaseReport(dir, oldVersion, newVersion string) (report, error) {
 	// Check out the old and new versions to temporary directories.
 	code, err := codehost.LocalGitRepo(filepath.Join(repoRoot, ".git"))
 	if err != nil {
-		return report{}, err
+		return Report{}, err
 	}
 	repo, err := fakemodfetch.NewCodeRepo(code, codeRoot, modPath)
 	if err != nil {
-		return report{}, err
+		return Report{}, err
 	}
 
 	scratchDir, err := ioutil.TempDir("", "gorelease-")
 	if err != nil {
-		return report{}, err
+		return Report{}, err
 	}
 	defer os.RemoveAll(scratchDir)
 
 	oldPkgs, err := checkoutAndLoad(repo, oldVersion, scratchDir)
 	if err != nil {
-		return report{}, err
+		return Report{}, err
 	}
 	newPkgs, err := checkoutAndLoad(repo, newVersion, scratchDir)
 	if err != nil {
-		return report{}, err
+		return Report{}, err
 	}
 
 	// Compare each pair of packages.
 	oldIndex, newIndex := 0, 0
-	r := report{
-		oldVersion: oldVersion,
-		newVersion: newVersion,
+	r := Report{
+		OldVersion: oldVersion,
+		NewVersion: newVersion,
 	}
 	for oldIndex < len(oldPkgs) || newIndex < len(newPkgs) {
 		if oldIndex < len(oldPkgs) && (newIndex == len(newPkgs) || oldPkgs[oldIndex].PkgPath < newPkgs[newIndex].PkgPath) {
-			r.packages = append(r.packages, packageReport{
-				path: oldPkgs[oldIndex].PkgPath,
+			r.Packages = append(r.Packages, PackageReport{
+				Path:      oldPkgs[oldIndex].PkgPath,
+				OldErrors: oldPkgs[oldIndex].Errors,
 				Report: apidiff.Report{
 					Changes: []apidiff.Change{{
-						Message:    "package added",
+						Message:    "package removed",
 						Compatible: false,
 					}},
 				},
 			})
 			oldIndex++
 		} else if newIndex < len(newPkgs) && (oldIndex == len(oldPkgs) || newPkgs[newIndex].PkgPath < oldPkgs[oldIndex].PkgPath) {
-			r.packages = append(r.packages, packageReport{
-				path: newPkgs[newIndex].PkgPath,
+			r.Packages = append(r.Packages, PackageReport{
+				Path:      newPkgs[newIndex].PkgPath,
+				NewErrors: newPkgs[newIndex].Errors,
 				Report: apidiff.Report{
 					Changes: []apidiff.Change{{
 						Message:    "package added",
@@ -205,15 +219,15 @@ func makeReleaseReport(dir, oldVersion, newVersion string) (report, error) {
 		} else {
 			oldPkg := oldPkgs[oldIndex]
 			newPkg := newPkgs[newIndex]
-			pr := packageReport{
-				path:      oldPkg.PkgPath,
-				oldErrors: oldPkg.Errors,
-				newErrors: newPkg.Errors,
+			pr := PackageReport{
+				Path:      oldPkg.PkgPath,
+				OldErrors: oldPkg.Errors,
+				NewErrors: newPkg.Errors,
 			}
 			if len(oldPkg.Errors) == 0 && len(newPkg.Errors) == 0 {
 				pr.Report = apidiff.Changes(oldPkg.Types, newPkg.Types)
 			}
-			r.packages = append(r.packages, pr)
+			r.Packages = append(r.Packages, pr)
 			oldIndex++
 			newIndex++
 		}
@@ -316,61 +330,66 @@ func checkoutAndLoad(repo fakemodfetch.Repo, version, scratchDir string) ([]*pac
 	return pkgs, nil
 }
 
-type report struct {
-	packages               []packageReport
-	oldVersion, newVersion string
+type Report struct {
+	Packages               []PackageReport
+	OldVersion, NewVersion string
 }
 
-func (r *report) Text(w io.Writer) error {
-	// TODO: this would be more readable as a template. We'd also have
-	// more control over apidiff output.
-	for _, p := range r.packages {
-		if len(p.Changes) == 0 && len(p.oldErrors) == 0 && len(p.newErrors) == 0 {
-			continue
-		}
-		if _, err := fmt.Fprintf(w, "%s\n%s\n", p.path, strings.Repeat("-", len(p.path))); err != nil {
+func (r *Report) Text(w io.Writer) error {
+	for _, p := range r.Packages {
+		if err := p.Text(w); err != nil {
 			return err
-		}
-		if len(p.oldErrors) > 0 {
-			if _, err := fmt.Fprintf(w, "errors in old version %s:\n", r.oldVersion); err != nil {
-				return err
-			}
-			for _, e := range p.oldErrors {
-				if _, err := fmt.Fprintf(w, "\t%v\n", e); err != nil {
-					return err
-				}
-			}
-			if _, err := w.Write([]byte("\n")); err != nil {
-				return err
-			}
-		}
-		if len(p.newErrors) > 0 {
-			if _, err := fmt.Fprintf(w, "errors in new version %s\n", r.newVersion); err != nil {
-				return err
-			}
-			for _, e := range p.newErrors {
-				if _, err := fmt.Fprintf(w, "\t%v\n", e); err != nil {
-					return err
-				}
-			}
-			if _, err := w.Write([]byte("\n")); err != nil {
-				return err
-			}
-		}
-		if len(p.Changes) > 0 {
-			if err := p.Text(w); err != nil {
-				return err
-			}
-			if _, err := w.Write([]byte("\n")); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
 }
 
-type packageReport struct {
+type PackageReport struct {
 	apidiff.Report
-	path                 string
-	oldErrors, newErrors []packages.Error
+	Path                 string
+	OldErrors, NewErrors []packages.Error
+}
+
+func (p *PackageReport) Text(w io.Writer) error {
+	if len(p.Changes) == 0 && len(p.OldErrors) == 0 && len(p.NewErrors) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(w, "%s\n%s\n", p.Path, strings.Repeat("-", len(p.Path))); err != nil {
+		return err
+	}
+	if len(p.OldErrors) > 0 {
+		if _, err := fmt.Fprintf(w, "errors in old version:\n"); err != nil {
+			return err
+		}
+		for _, e := range p.OldErrors {
+			if _, err := fmt.Fprintf(w, "\t%v\n", e); err != nil {
+				return err
+			}
+		}
+		if _, err := w.Write([]byte("\n")); err != nil {
+			return err
+		}
+	}
+	if len(p.NewErrors) > 0 {
+		if _, err := fmt.Fprintf(w, "errors in new version:\n"); err != nil {
+			return err
+		}
+		for _, e := range p.NewErrors {
+			if _, err := fmt.Fprintf(w, "\t%v\n", e); err != nil {
+				return err
+			}
+		}
+		if _, err := w.Write([]byte("\n")); err != nil {
+			return err
+		}
+	}
+	if len(p.Changes) > 0 {
+		if err := p.Report.Text(w); err != nil {
+			return err
+		}
+		if _, err := w.Write([]byte("\n")); err != nil {
+			return err
+		}
+	}
+	return nil
 }

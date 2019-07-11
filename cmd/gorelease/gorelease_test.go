@@ -76,11 +76,13 @@ func TestRelease(t *testing.T) {
 		}
 	}
 
+	noTestsFound := true
 	for _, info := range infos {
 		name := info.Name()
 		if filepath.Ext(name) != ".test" {
 			continue
 		}
+		noTestsFound = false
 		t.Run(name[:len(name)-len(".test")], func(t *testing.T) {
 			// Read the test file, and find a line that contains "---".
 			// Above this are key=value configuration settings.
@@ -161,6 +163,9 @@ func TestRelease(t *testing.T) {
 				}
 			}
 		})
+	}
+	if noTestsFound {
+		t.Error("no .test files found in testdata directory")
 	}
 }
 
