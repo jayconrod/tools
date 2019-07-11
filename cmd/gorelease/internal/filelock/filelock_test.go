@@ -8,7 +8,7 @@ package filelock_test
 
 import (
 	"fmt"
-	"internal/testenv"
+	"golang.org/x/tools/cmd/gorelease/internal/testenv"
 	"io/ioutil"
 	"os"
 	"os/exec"

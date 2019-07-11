@@ -9,7 +9,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"internal/testenv"
+	"golang.org/x/tools/cmd/gorelease/internal/testenv"
 	"io/ioutil"
 	"log"
 	"os"

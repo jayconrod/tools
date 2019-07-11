@@ -17,6 +17,7 @@ pkgs=(
   cmd/go/internal/str
   cmd/internal/objabi
   internal/lazyregexp
+  internal/testenv
 )
 goroot=$(go env GOROOT)
 to_base_pkg=golang.org/x/tools/cmd/gorelease/internal
@@ -32,6 +33,7 @@ for pkg in "${pkgs[@]}"; do
   from_dir=$goroot/src/$pkg
   to_pkg=$to_base_pkg/$(basename "$pkg")
   to_dir=$to_base_dir/$(basename "$pkg")
+  rm -rf "$to_dir"
   mkdir -p "$to_dir"
 
   for f in "$from_dir"/*; do
@@ -41,6 +43,10 @@ for pkg in "${pkgs[@]}"; do
       cp -r "$f" "$to_dir/$(basename "$f")"
     fi
   done
-  go fmt "$to_pkg"
+  go fmt "$to_pkg" >/dev/null
 done
 
+patches=($(ls -1 *.patch | sort))
+for p in "${patches[@]}"; do
+  patch --silent -Np1 -i "$p"
+done
