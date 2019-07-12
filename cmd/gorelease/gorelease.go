@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// gorelease is an experimental tool that helps module authors avoid common
+// problems before releasing a new version of a module.
+//
+// gorelease is intended to eventually be merged into the go command
+// as "go release". See golang.org/issues/26420.
 package main
 
 import (
@@ -20,32 +25,67 @@ import (
 	"golang.org/x/tools/cmd/gorelease/internal/codehost"
 	"golang.org/x/tools/cmd/gorelease/internal/fakemodfetch"
 	"golang.org/x/tools/cmd/gorelease/internal/modfile"
+	"golang.org/x/tools/cmd/gorelease/internal/semver"
 	"golang.org/x/tools/cmd/gorelease/internal/str"
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/internal/apidiff"
 )
 
 // TODO:
-// * Rename "old" to "base".
-// * Base version should be any tag, branch, or commit. We should not require
-//   submodule prefixes for tags that look like semantic versions, but we
-//   also should not automatically use semantic versions from the root module.
-// * Rename "new" to "version". When specified, we check whether that version
-//   is valid.
+// * Warn when changes aren't checked in.
+// * Print valid version or validate -version if set.
+// * Exit non-zero if there are incompatible changes.
+// * Support nested modules.
+// * Support major version subdirectory.
 // * Tolerate not having a go.mod file.
+// * Auto-detect base version if -base not set.
+// * Print something useful if no base version is found.
 // * Print tag, including submodule prefix.
 // * Positional arguments should specify which packages to check. Without
 //   these, we check all non-internal packages in the module.
 
 var CmdRelease = &base.Command{
-	UsageLine: "gorelease [-old version] [-new version]",
+	UsageLine: "gorelease [-base version] [-version version]",
 	Short:     "Check for common problems before releasing a new version of a module",
 	Long: `
 gorelease is an experimental tool that helps module authors avoid common
-problems before releasing a new version of a module. It reports
-API differences (both compatible and incompatible), and it warns about
-other common mistakes (for example, tagged a v2.x.y version without a
-/v2 suffix).
+problems before releasing a new version of a module.
+
+gorelease suggests a new version tag that satisfies semantic versioning
+requirements by comparing the public API of a module at two revisions:
+a base version, and the currently checked out revision. The base version
+may be determined automatically as the most recent version tag on the
+current branch, or it may be specified explicitly with the -base flag.
+
+If there are no differences in the module's public API, gorelease will suggest
+a new version that increments the base version's patch version number.
+For example, if the base version is "v2.3.1", gorelease would suggest
+"v2.3.2" as the new version. If there are only compatible differences
+in the module's public API, gorelease will suggest a new version that
+increments the base versions's minor version number. For example,
+if the base version is "v2.3.1", gorelease will suggest "v2.4.0". If there
+are incompatible differences, gorelease will exit with a non-zero status.
+Incompatible differences may only be released in a new major version,
+which involves creating a module with a different path. For example,
+if incompatible changes are made in the module "rsc.io/quote", a new major
+version must be released as a new module, "rsc.io/quote/v2".
+
+If the -version flag is given, gorelease will validate the proposed version
+instead of suggesting a new version. For example, if the base version is
+"v2.3.1", and the proposed version is "v2.3.2", and there are compatible
+changes in the module's API, gorelease will exit with a non-zero status
+since the minor version number was not incremented.
+
+gorelease accepts the following flags:
+
+	-base version
+		The base version that the currently checked out revision will be compared
+		against. The version must be a semantic version (for example, "v2.3.4").
+	-version version
+		The proposed version to be released. If specified, gorelease will
+		confirm whether this is a valid semantic version, given changes that are
+		made in the module's public API. gorelease will exit with a non-zero
+		status if the version is not valid.
 
 gorelease is intended to eventually be merged into the go command
 as "go release". See golang.org/issues/26420.
@@ -53,8 +93,8 @@ as "go release". See golang.org/issues/26420.
 }
 
 var (
-	oldVersion = CmdRelease.Flag.String("old", "", "base version of the module to compare")
-	newVersion = CmdRelease.Flag.String("new", "", "new version of the module to compare")
+	baseVersion    = CmdRelease.Flag.String("base", "", "base version of the module to compare")
+	releaseVersion = CmdRelease.Flag.String("version", "", "proposed version of the module.")
 )
 
 func init() {
@@ -97,17 +137,17 @@ func runRelease(cmd *base.Command, args []string) {
 	if len(args) != 0 {
 		base.Fatalf("go release: no arguments allowed")
 	}
-	if *oldVersion == "" {
-		base.Fatalf("go release: -old not set")
+	if *baseVersion == "" {
+		base.Fatalf("go release: -base not set")
 	}
-	if *newVersion == "" {
-		base.Fatalf("go release: -new not set")
+	if *releaseVersion == "" {
+		base.Fatalf("go release: -version not set")
 	}
 	wd, err := os.Getwd()
 	if err != nil {
 		base.Fatalf("go release: %v", err)
 	}
-	report, err := makeReleaseReport(wd, *oldVersion, *newVersion)
+	report, err := makeReleaseReport(wd, *baseVersion, *releaseVersion)
 	if err != nil {
 		base.Fatalf("go release: %v", err)
 	}
@@ -116,9 +156,11 @@ func runRelease(cmd *base.Command, args []string) {
 	}
 }
 
-func makeReleaseReport(dir, oldVersion, newVersion string) (Report, error) {
-	if oldVersion == newVersion {
-		return Report{}, errors.New("-old and -new must be different versions")
+func makeReleaseReport(dir, baseVersion, releaseVersion string) (Report, error) {
+	if cmp := semver.Compare(baseVersion, releaseVersion); cmp == 0 {
+		return Report{}, errors.New("-base and -version must be different versions")
+	} else if cmp > 0 {
+		return Report{}, errors.New("-base must be older than -version")
 	}
 
 	// Locate the module root and repository root directories.
@@ -176,11 +218,11 @@ func makeReleaseReport(dir, oldVersion, newVersion string) (Report, error) {
 	}
 	defer os.RemoveAll(scratchDir)
 
-	oldPkgs, err := checkoutAndLoad(repo, oldVersion, scratchDir)
+	oldPkgs, err := checkoutAndLoad(repo, baseVersion, scratchDir)
 	if err != nil {
 		return Report{}, err
 	}
-	newPkgs, err := checkoutAndLoad(repo, newVersion, scratchDir)
+	newPkgs, err := checkoutAndLoad(repo, releaseVersion, scratchDir)
 	if err != nil {
 		return Report{}, err
 	}
@@ -188,8 +230,8 @@ func makeReleaseReport(dir, oldVersion, newVersion string) (Report, error) {
 	// Compare each pair of packages.
 	oldIndex, newIndex := 0, 0
 	r := Report{
-		OldVersion: oldVersion,
-		NewVersion: newVersion,
+		OldVersion: baseVersion,
+		NewVersion: releaseVersion,
 	}
 	for oldIndex < len(oldPkgs) || newIndex < len(newPkgs) {
 		if oldIndex < len(oldPkgs) && (newIndex == len(newPkgs) || oldPkgs[oldIndex].PkgPath < newPkgs[newIndex].PkgPath) {
