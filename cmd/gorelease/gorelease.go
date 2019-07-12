@@ -16,6 +16,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -32,7 +33,6 @@ import (
 )
 
 // TODO:
-// * Warn when changes aren't checked in.
 // * Print valid version or validate -version if set.
 // * Exit non-zero if there are incompatible changes.
 // * Support nested modules.
@@ -135,24 +135,24 @@ func initEnv() {
 
 func runRelease(cmd *base.Command, args []string) {
 	if len(args) != 0 {
-		base.Fatalf("go release: no arguments allowed")
+		base.Fatalf("gorelease: no arguments allowed")
 	}
 	if *baseVersion == "" {
-		base.Fatalf("go release: -base not set")
+		base.Fatalf("gorelease: -base not set")
 	}
 	if *releaseVersion == "" {
-		base.Fatalf("go release: -version not set")
+		base.Fatalf("gorelease: -version not set")
 	}
 	wd, err := os.Getwd()
 	if err != nil {
-		base.Fatalf("go release: %v", err)
+		base.Fatalf("gorelease: %v", err)
 	}
 	report, err := makeReleaseReport(wd, *baseVersion, *releaseVersion)
 	if err != nil {
-		base.Fatalf("go release: %v", err)
+		base.Fatalf("gorelease: %v", err)
 	}
 	if err := report.Text(os.Stdout); err != nil {
-		base.Fatalf("go release: %v", err)
+		base.Fatalf("gorelease: %v", err)
 	}
 }
 
@@ -170,6 +170,9 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (Report, error) 
 	}
 	repoRoot, err := findRepoRoot(dir)
 	if err != nil {
+		return Report{}, err
+	}
+	if err := repoHasPendingChanges(repoRoot); err != nil {
 		return Report{}, err
 	}
 
@@ -316,6 +319,20 @@ func findModuleRoot(dir string) (root string) {
 		dir = d
 	}
 	return ""
+}
+
+// returns whether there are pending changes in the repository rooted at
+// the given directory.
+// TODO: generalize to version control systems other than git.
+func repoHasPendingChanges(root string) error {
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = root
+	if out, err := cmd.Output(); err != nil {
+		return fmt.Errorf("could not determine if there were uncommitted changes in the current repository: %v", err)
+	} else if len(out) > 0 {
+		return errors.New("there are uncommitted changes in the current repository")
+	}
+	return nil
 }
 
 // dirMajorSuffix returns a major version suffix for a slash-separated path.

@@ -102,17 +102,18 @@ func TestRelease(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			var wantOffset int64
 			sep := []byte("\n---\n")
-			var configData, want []byte
 			sepOffset := bytes.Index(data, sep)
 			if sepOffset < 0 {
 				t.Fatal("could not find separator")
-			} else {
-				configData = data[:sepOffset]
-				want = bytes.TrimSpace(data[sepOffset+len(sep):])
 			}
+			wantOffset = int64(sepOffset + len(sep))
+			configData := data[:sepOffset]
+			want := data[wantOffset:]
 
-			var repo, oldVersion, newVersion string
+			var repo, baseVersion, releaseVersion string
+			var wantErr bool
 			for lineNum, line := range bytes.Split(configData, []byte("\n")) {
 				line = bytes.TrimSpace(line)
 				if len(line) == 0 {
@@ -128,38 +129,46 @@ func TestRelease(t *testing.T) {
 				switch key {
 				case "repo":
 					repo = value
-				case "oldVersion":
-					oldVersion = value
-				case "newVersion":
-					newVersion = value
+				case "error":
+					wantErr = true
+				case "base":
+					baseVersion = value
+				case "version":
+					releaseVersion = value
 				default:
 					t.Fatalf("line %d: unknown key: %q", lineNum, key)
 				}
 			}
 
 			dir := filepath.Join(workDir, repo)
-			r, err := makeReleaseReport(dir, oldVersion, newVersion)
-			if err != nil {
-				t.Fatal(err)
-			}
-			buf := &bytes.Buffer{}
-			if err := r.Text(buf); err != nil {
-				t.Fatal(err)
-			}
-			got := bytes.TrimSpace(buf.Bytes())
-			if !bytes.Equal(got, want) {
-				if *updateGolden {
-					if err := f.Truncate(int64(sepOffset + len(sep))); err != nil {
-						t.Fatalf("error truncating golden file: %v", err)
+			r, err := makeReleaseReport(dir, baseVersion, releaseVersion)
+			if wantErr {
+				if err == nil {
+					t.Fatalf("got success; want error:\n%s", want)
+				}
+				got := []byte(err.Error())
+				if !bytes.Equal(got, want) {
+					if *updateGolden {
+						updateGoldenFile(t, f, wantOffset, got)
+					} else {
+						t.Errorf("got error:\n%s\n\nwant error:\n%s", got, want)
 					}
-					if _, err := f.Seek(0, 2); err != nil {
-						t.Fatalf("error seeking golden file: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				buf := &bytes.Buffer{}
+				if err := r.Text(buf); err != nil {
+					t.Fatal(err)
+				}
+				got := bytes.TrimSpace(buf.Bytes())
+				if !bytes.Equal(got, want) {
+					if *updateGolden {
+						updateGoldenFile(t, f, wantOffset, got)
+					} else {
+						t.Errorf("got:\n%s\n\nwant:\n%s", got, want)
 					}
-					if _, err := f.Write(got); err != nil {
-						t.Fatalf("error writing golden file: %v", err)
-					}
-				} else {
-					t.Errorf("got:\n%s\n\nwant:\n%s", got, want)
 				}
 			}
 		})
@@ -210,4 +219,16 @@ func extractZip(destDir, zipPath string) error {
 		}
 	}
 	return nil
+}
+
+func updateGoldenFile(t *testing.T, f *os.File, offset int64, got []byte) {
+	if err := f.Truncate(offset); err != nil {
+		t.Fatalf("error truncating golden file: %v", err)
+	}
+	if _, err := f.Seek(0, 2); err != nil {
+		t.Fatalf("error seeking golden file: %v", err)
+	}
+	if _, err := f.Write(got); err != nil {
+		t.Fatalf("error writing golden file: %v", err)
+	}
 }

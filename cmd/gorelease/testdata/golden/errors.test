@@ -1,6 +1,6 @@
 repo=errors
-oldVersion=v0.1.0
-newVersion=v0.2.0
+base=v0.1.0
+version=v0.2.0
 ---
 example.com/errors/added
 ------------------------
