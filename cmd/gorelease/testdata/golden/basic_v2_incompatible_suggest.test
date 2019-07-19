@@ -1,0 +1,16 @@
+repo=basic
+revision=v2.1.2
+base=v2.1.1
+success=false
+---
+example.com/basic/v2/a
+----------------------
+Incompatible changes:
+- A2: removed
+
+example.com/basic/v2/b
+----------------------
+Incompatible changes:
+- package removed
+
+Suggested version: v3.0.0

@@ -1,6 +1,7 @@
 repo=errors
 base=v0.1.0
 version=v0.2.0
+success=false
 ---
 example.com/errors/added
 ------------------------
@@ -27,3 +28,6 @@ example.com/errors/fixed
 ------------------------
 errors in old version:
 	fixed/fixed.go:3:15: cannot convert "not an int" (untyped string constant) to int
+
+v0.2.0 is not a valid semantic version for this release.
+Errors were found in one or more packages.

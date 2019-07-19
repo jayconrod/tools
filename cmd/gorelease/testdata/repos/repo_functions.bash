@@ -20,6 +20,7 @@ function repo_pack {
   fi
   local name=$1
   cd ..
+  rm -f "$name.zip"
   zip --quiet -r "$name.zip" "$name"
   rm -rf "$name"
 }

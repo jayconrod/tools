@@ -12,7 +12,9 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -83,7 +85,8 @@ func TestRelease(t *testing.T) {
 			continue
 		}
 		noTestsFound = false
-		t.Run(name[:len(name)-len(".test")], func(t *testing.T) {
+		testName := name[:len(name)-len(".test")]
+		t.Run(testName, func(t *testing.T) {
 			// Read the test file, and find a line that contains "---".
 			// Above this are key=value configuration settings.
 			// Below this is the expected output.
@@ -106,22 +109,27 @@ func TestRelease(t *testing.T) {
 			sep := []byte("\n---\n")
 			sepOffset := bytes.Index(data, sep)
 			if sepOffset < 0 {
-				t.Fatal("could not find separator")
+				t.Fatalf("%s: could not find separator", testPath)
 			}
 			wantOffset = int64(sepOffset + len(sep))
 			configData := data[:sepOffset]
-			want := data[wantOffset:]
+			want := bytes.TrimSpace(data[wantOffset:])
 
 			var repo, baseVersion, releaseVersion string
-			var wantErr bool
+			var wantErr, skip bool
+			revision := "master"
+			wantSuccess := true
 			for lineNum, line := range bytes.Split(configData, []byte("\n")) {
+				if i := bytes.IndexByte(line, '#'); i >= 0 {
+					line = line[:i]
+				}
 				line = bytes.TrimSpace(line)
 				if len(line) == 0 {
 					continue
 				}
 				var key, value string
 				if i := bytes.IndexByte(line, '='); i < 0 {
-					t.Fatalf("line %d: no '=' found", lineNum+1)
+					t.Fatalf("%s:%d: no '=' found", testPath, lineNum+1)
 				} else {
 					key = string(line[:i])
 					value = string(line[i+1:])
@@ -129,19 +137,57 @@ func TestRelease(t *testing.T) {
 				switch key {
 				case "repo":
 					repo = value
+				case "revision":
+					revision = value
 				case "error":
-					wantErr = true
+					wantErr, err = strconv.ParseBool(value)
+					if err != nil {
+						t.Fatalf("%s:%d: %v", testPath, lineNum+1, err)
+					}
+				case "success":
+					wantSuccess, err = strconv.ParseBool(value)
+					if err != nil {
+						t.Fatalf("%s:%d: %v", testPath, lineNum+1, err)
+					}
+				case "skip":
+					skip, err = strconv.ParseBool(value)
+					if err != nil {
+						t.Fatalf("%s:%d: %v", testPath, lineNum+1, err)
+					}
 				case "base":
 					baseVersion = value
 				case "version":
 					releaseVersion = value
 				default:
-					t.Fatalf("line %d: unknown key: %q", lineNum, key)
+					t.Fatalf("%s:%d: unknown key: %q", testPath, lineNum+1, key)
 				}
 			}
+			if skip {
+				t.Skip(string(want))
+			}
 
-			dir := filepath.Join(workDir, repo)
-			r, err := makeReleaseReport(dir, baseVersion, releaseVersion)
+			// Checkout the target version.
+			// Rename the repo first to defeat caching. If the repo is cached, the
+			// commit for HEAD will be saved in memory, even though we change it
+			// on disk.
+			origRepoDir := filepath.Join(workDir, repo)
+			repoDir := origRepoDir + "-TestRelease." + testName
+			if err := os.Rename(origRepoDir, repoDir); err != nil {
+				t.Fatalf("error renaming repo: %v", err)
+			}
+			defer func() {
+				if err := os.Rename(repoDir, origRepoDir); err != nil {
+					t.Fatalf("error restoring repo: %v", err)
+				}
+			}()
+
+			cmd := exec.Command("git", "checkout", "--quiet", revision)
+			cmd.Dir = repoDir
+			if _, err := cmd.Output(); err != nil {
+				t.Fatalf("could not checkout revision %q: %v", revision, err)
+			}
+
+			r, err := makeReleaseReport(repoDir, baseVersion, releaseVersion)
 			if wantErr {
 				if err == nil {
 					t.Fatalf("got success; want error:\n%s", want)
@@ -169,6 +215,10 @@ func TestRelease(t *testing.T) {
 					} else {
 						t.Errorf("got:\n%s\n\nwant:\n%s", got, want)
 					}
+				}
+				success := r.isSuccessful()
+				if success != wantSuccess {
+					t.Errorf("success: got %t, want %t", success, wantSuccess)
 				}
 			}
 		})

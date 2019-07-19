@@ -15,13 +15,19 @@ import (
 func Checkout(repo Repo, vers, scratchDir string) (dir string, err error) {
 	// Create a zip file for the module at the specific version.
 	// This should match the zip that cmd/go would create.
-	zipPath := filepath.Join(scratchDir, vers+".zip")
+	info, err := repo.Stat(vers)
+	if err != nil {
+		return "", err
+	}
+	statVers := info.Version
+
+	zipPath := filepath.Join(scratchDir, statVers+".zip")
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
 		return "", err
 	}
 
-	if err := repo.Zip(zipFile, vers); err != nil {
+	if err := repo.Zip(zipFile, statVers); err != nil {
 		zipFile.Close()
 		return "", err
 	}
@@ -30,7 +36,7 @@ func Checkout(repo Repo, vers, scratchDir string) (dir string, err error) {
 	}
 
 	dir = filepath.Join(scratchDir, vers)
-	prefix := repo.ModulePath() + "@" + vers
+	prefix := repo.ModulePath() + "@" + statVers
 	if err := Unzip(dir, zipPath, prefix, 0); err != nil {
 		return "", err
 	}
