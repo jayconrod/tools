@@ -6,10 +6,15 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
+source ../repo_functions.bash
 
-for i in ./generate_*.bash; do
-  if [ "$i" = "./$(basename "$0")" ]; then
-    continue
-  fi
-  "$i"
-done
+# Create the repository.
+repo_create
+
+# Create a file without committing it.
+cat >untracked.go <<EOF
+package untracked
+EOF
+
+# Package the repository.
+repo_pack

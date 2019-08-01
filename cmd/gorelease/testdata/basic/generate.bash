@@ -14,10 +14,10 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
-source repo_functions.bash
+source ../repo_functions.bash
 
 # Create the repository
-repo_create basic
+repo_create
 
 for major in v0 v1 v2; do
   # Clear any previous changes.
@@ -80,4 +80,4 @@ EOF
 done
 
 # Package the repository
-repo_pack basic
+repo_pack

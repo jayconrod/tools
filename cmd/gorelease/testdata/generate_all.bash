@@ -6,15 +6,9 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
-source repo_functions.bash
 
-# Create the repository.
-repo_create pending
-
-# Create a file without committing it.
-cat >untracked.go <<EOF
-package untracked
-EOF
-
-# Package the repository.
-repo_pack pending
+for i in */; do
+  if [ -f "$i/generate.bash" ]; then
+    bash "$i/generate.bash"
+  fi
+done

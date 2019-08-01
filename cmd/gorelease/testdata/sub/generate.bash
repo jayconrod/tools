@@ -18,10 +18,10 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
-source repo_functions.bash
+source ../repo_functions.bash
 
 # Create the repository
-repo_create sub
+repo_create
 
 # Create the base modules. Files are empty, so expect syntax errors.
 mkdir -p v2 nest/v2
@@ -109,4 +109,4 @@ git commit -am 'example.com/sub/nest/v2 v2.0.1'
 git tag nest/v2.0.1
 
 # Package the repository
-repo_pack sub
+repo_pack

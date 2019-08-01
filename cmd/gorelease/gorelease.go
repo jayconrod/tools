@@ -37,12 +37,10 @@ import (
 
 // TODO:
 // * Auto-detect base version if -base not set.
-// * Support nested modules.
-// * Support major version subdirectory.
-// * Organize tests by repository.
 // * Test that changes in internal packages aren't listed, unless their types
 //   are expected in non-internal packages.
 // * Tolerate not having a go.mod file.
+// * Test that a go.mod file is not required for base version.
 // * Print something useful if no base version is found.
 // * Print tag, including submodule prefix.
 // * Positional arguments should specify which packages to check. Without

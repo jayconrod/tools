@@ -1,9 +1,17 @@
+# Copyright 2019 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
 function repo_create {
-  if [ $# -ne 1 ]; then
+  local name
+  if [ $# -eq 0 ]; then
+    name=$(basename $(pwd))
+  elif [ $# -eq 1 ]; then
+    name=$1
+  else
     echo "usage: repo_create name" >&2
     return 1
   fi
-  local name=$1
   rm -rf "$name"
   mkdir "$name"
   cd "$name"
@@ -14,11 +22,15 @@ function repo_create {
 }
 
 function repo_pack {
-  if [ $# -ne 1 ]; then
+  local name
+  if [ $# -eq 0 ]; then
+    name=$(basename $(pwd))
+  elif [ $# -eq 1 ]; then
+    name=$1
+  else
     echo "usage: repo_pack name" >&2
     return 1
   fi
-  local name=$1
   cd ..
   rm -f "$name.zip"
   zip --quiet -r "$name.zip" "$name"

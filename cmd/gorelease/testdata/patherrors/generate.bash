@@ -6,10 +6,10 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
-source repo_functions.bash
+source ../repo_functions.bash
 
 # Create the repository
-repo_create patherrors
+repo_create
 
 # abspath: module path is absolute path
 cat >go.mod <<EOF
@@ -53,4 +53,4 @@ git commit -am pathsubv2
 git tag pathsubv2
 
 # Package the repository
-repo_pack patherrors
+repo_pack

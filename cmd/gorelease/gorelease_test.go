@@ -47,19 +47,23 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "test work dir: %s\n", workDir)
 	}
 
-	repoZipDir := filepath.Join("testdata", "repos")
-	infos, err := ioutil.ReadDir(repoZipDir)
+	infos, err := ioutil.ReadDir("testdata")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
 	for _, info := range infos {
+		if !info.IsDir() {
+			continue
+		}
 		name := info.Name()
-		if !info.IsDir() && filepath.Ext(name) == ".zip" {
-			if err := extractZip(workDir, filepath.Join(repoZipDir, name)); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return
-			}
+		zipPath := filepath.Join("testdata", name, name+".zip")
+		if _, err := os.Stat(zipPath); os.IsNotExist(err) {
+			continue
+		}
+		if err := extractZip(workDir, zipPath); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
 		}
 	}
 
@@ -67,30 +71,29 @@ func TestMain(m *testing.M) {
 }
 
 func TestRelease(t *testing.T) {
-	infos, err := ioutil.ReadDir(filepath.FromSlash("testdata/golden"))
+	var testPaths []string
+	err := filepath.Walk("testdata", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && strings.HasSuffix(path, ".test") {
+			testPaths = append(testPaths, path)
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	testNames := make([]string, 0, len(infos))
-	for _, info := range infos {
-		if name := info.Name(); filepath.Ext(name) == ".test" {
-			testNames = append(testNames, name[:len(name)-len(".test")])
-		}
+	if len(testPaths) == 0 {
+		t.Error("no .test files found in testdata directory")
 	}
 
-	noTestsFound := true
-	for _, info := range infos {
-		name := info.Name()
-		if filepath.Ext(name) != ".test" {
-			continue
-		}
-		noTestsFound = false
-		testName := name[:len(name)-len(".test")]
+	for _, testPath := range testPaths {
+		testName := filepath.ToSlash(testPath)[len("testdata/") : len(testPath)-len(".test")]
 		t.Run(testName, func(t *testing.T) {
 			// Read the test file, and find a line that contains "---".
 			// Above this are key=value configuration settings.
 			// Below this is the expected output.
-			testPath := filepath.Join("testdata", "golden", name)
 			f, err := os.OpenFile(testPath, os.O_RDWR, 0666)
 			if err != nil {
 				t.Fatal(err)
@@ -173,7 +176,8 @@ func TestRelease(t *testing.T) {
 			// commit for HEAD will be saved in memory, even though we change it
 			// on disk.
 			origRepoDir := filepath.Join(workDir, repo)
-			repoDir := origRepoDir + "-TestRelease." + testName
+			testSuffix := strings.Replace(testName, "/", "_", -1)
+			repoDir := origRepoDir + "-TestRelease." + testSuffix
 			if err := os.Rename(origRepoDir, repoDir); err != nil {
 				t.Fatalf("error renaming repo: %v", err)
 			}
@@ -228,9 +232,6 @@ func TestRelease(t *testing.T) {
 				}
 			}
 		})
-	}
-	if noTestsFound {
-		t.Error("no .test files found in testdata directory")
 	}
 }
 

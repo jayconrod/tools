@@ -13,10 +13,10 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
-source repo_functions.bash
+source ../repo_functions.bash
 
 # Create the repository.
-repo_create errors
+repo_create
 
 # v0.1.0
 mkdir fixed
@@ -71,4 +71,4 @@ git commit -m 'v0.2.0'
 git tag v0.2.0
 
 # Package the repository
-repo_pack errors
+repo_pack
