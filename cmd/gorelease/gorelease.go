@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,10 +36,12 @@ import (
 )
 
 // TODO:
-// * Exit non-zero if there are incompatible changes.
 // * Auto-detect base version if -base not set.
 // * Support nested modules.
 // * Support major version subdirectory.
+// * Organize tests by repository.
+// * Test that changes in internal packages aren't listed, unless their types
+//   are expected in non-internal packages.
 // * Tolerate not having a go.mod file.
 // * Print something useful if no base version is found.
 // * Print tag, including submodule prefix.
@@ -191,17 +194,8 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 	if !str.HasFilePathPrefix(modRoot, repoRoot) {
 		return report{}, fmt.Errorf("module directory %q is not in repository root directory %q", modRoot, repoRoot)
 	}
-	subdir := ""
-	if modRoot != repoRoot {
-		subdir = filepath.ToSlash(modRoot[len(repoRoot)+1:])
-	}
-	if subdir != "" {
-		// TODO: implement
-		return report{}, errors.New("submodules not implemented")
-	}
 
 	// Read the module path from the go.mod file.
-	// Determine the module path for the repository root.
 	goModPath := filepath.Join(modRoot, "go.mod")
 	modData, err := ioutil.ReadFile(goModPath)
 	if err != nil {
@@ -215,7 +209,43 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 		return report{}, fmt.Errorf("no module statement in %s", goModPath)
 	}
 	modPath := modFile.Module.Mod.Path
-	codeRoot := modPath
+	if path.IsAbs(modPath) || filepath.IsAbs(modPath) {
+		return report{}, fmt.Errorf("module path %q may not be an absolute path.\nIt must be an address where your module may be found.", modPath)
+	}
+	// TODO(jayconrod): check for invalid characters.
+	modPrefix, modPathMajor, ok := module.SplitPathVersion(modPath)
+	if !ok {
+		return report{}, fmt.Errorf("%s: could not find version suffix in module path", modPath)
+	}
+
+	// Determine the module path prefix for the repository root.
+	codeRoot := modPrefix
+	if modRoot != repoRoot {
+		if strings.HasPrefix(modPathMajor, ".") {
+			return report{}, fmt.Errorf("%s: module path starts with gopkg.in and must be declared in the root directory of the repository", modPath)
+		}
+		codeDir := filepath.ToSlash(modRoot[len(repoRoot)+1:])
+		var suffix string
+		if modPathMajor == "" || modPathMajor[0] != '/' {
+			if !strings.HasSuffix(modPath, "/"+codeDir) {
+				return report{}, fmt.Errorf("%s: module path must end with %[2]q, since it is in subdirectory %[2]q", modPath, codeDir)
+			}
+			suffix = "/" + codeDir
+		} else {
+			if strings.HasSuffix(modPath, "/"+codeDir) {
+				suffix = "/" + codeDir
+			} else if strings.HasSuffix(modPath, "/"+codeDir+modPathMajor) {
+				suffix = "/" + codeDir + modPathMajor
+			} else {
+				return report{}, fmt.Errorf("%s: module path must end with %[2]q or %q, since it is in subdirectory %[2]q", modPath, codeDir, codeDir+modPathMajor)
+			}
+		}
+		codeRoot = modPath[:len(modPath)-len(suffix)]
+	}
+	// TODO(jayconrod): if the origin fully resolves the v2+ module path
+	// as was the case for nanomsg.org/go/mangos/v2, codeRoot must include the
+	// major version suffix, and major versions may not be in subdirectories.
+	// This allows major versions to be in different repositories.
 
 	// Check out the old and new versions to temporary directories.
 	// TODO(jayconrod): we set the repo directory to be the .git directory itself

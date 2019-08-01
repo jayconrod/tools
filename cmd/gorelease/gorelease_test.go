@@ -115,7 +115,7 @@ func TestRelease(t *testing.T) {
 			configData := data[:sepOffset]
 			want := bytes.TrimSpace(data[wantOffset:])
 
-			var repo, baseVersion, releaseVersion string
+			var repo, dir, baseVersion, releaseVersion string
 			var wantErr, skip bool
 			revision := "master"
 			wantSuccess := true
@@ -137,6 +137,8 @@ func TestRelease(t *testing.T) {
 				switch key {
 				case "repo":
 					repo = value
+				case "dir":
+					dir = value
 				case "revision":
 					revision = value
 				case "error":
@@ -187,7 +189,11 @@ func TestRelease(t *testing.T) {
 				t.Fatalf("could not checkout revision %q: %v", revision, err)
 			}
 
-			r, err := makeReleaseReport(repoDir, baseVersion, releaseVersion)
+			testDir := repoDir
+			if dir != "" {
+				testDir = filepath.Join(testDir, dir)
+			}
+			r, err := makeReleaseReport(testDir, baseVersion, releaseVersion)
 			if wantErr {
 				if err == nil {
 					t.Fatalf("got success; want error:\n%s", want)

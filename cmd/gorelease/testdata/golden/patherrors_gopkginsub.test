@@ -1,0 +1,7 @@
+repo=patherrors
+revision=gopkginsub
+dir=yaml
+base=v0.0.0
+error=true
+---
+gopkg.in/yaml.v2: module path starts with gopkg.in and must be declared in the root directory of the repository

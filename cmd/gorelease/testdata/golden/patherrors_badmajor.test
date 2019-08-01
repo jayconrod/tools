@@ -1,0 +1,6 @@
+repo=patherrors
+revision=badmajor
+base=v0.0.0
+error=true
+---
+example.com/patherrors/v0: could not find version suffix in module path
