@@ -36,7 +36,6 @@ import (
 )
 
 // TODO:
-// * Print tag if different from release version.
 // * Test that changes in internal packages aren't listed, unless their types
 //   are expected in non-internal packages.
 // * Tolerate not having a go.mod file.
@@ -316,6 +315,7 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 		modulePath:     modPath,
 		baseVersion:    baseVersion,
 		releaseVersion: releaseVersion,
+		tagPrefix:      tagPrefix,
 	}
 	for oldIndex < len(oldPkgs) || newIndex < len(newPkgs) {
 		if oldIndex < len(oldPkgs) && (newIndex == len(newPkgs) || oldPkgs[oldIndex].PkgPath < newPkgs[newIndex].PkgPath) {
@@ -472,7 +472,7 @@ func checkoutAndLoad(repo fakemodfetch.Repo, version, scratchDir string) ([]*pac
 
 type report struct {
 	modulePath                                                 string
-	baseVersion, releaseVersion                                string
+	baseVersion, releaseVersion, tagPrefix                     string
 	packages                                                   []PackageReport
 	haveCompatibleChanges, haveIncompatibleChanges, haveErrors bool
 }
@@ -493,10 +493,19 @@ func (r *report) Text(w io.Writer) error {
 		if err := r.validateVersion(); err != nil {
 			summary = err.Error()
 		} else {
-			summary = fmt.Sprintf("%s is a valid semantic version for this release.", r.releaseVersion)
+			if r.tagPrefix == "" {
+				summary = fmt.Sprintf("%s is a valid semantic version for this release.", r.releaseVersion)
+			} else {
+				summary = fmt.Sprintf("%[2]s (with tag %[1]s%[2]s) is a valid semantic version for this release", r.tagPrefix, r.releaseVersion)
+			}
 		}
 	} else {
-		summary = fmt.Sprintf("Suggested version: %s", r.suggestVersion())
+		suggestedVersion := r.suggestVersion()
+		if r.tagPrefix == "" {
+			summary = fmt.Sprintf("Suggested version: %s", suggestedVersion)
+		} else {
+			summary = fmt.Sprintf("Suggested version: %[2]s (with tag %[1]s%[2]s)", r.tagPrefix, suggestedVersion)
+		}
 		if r.haveIncompatibleChanges {
 			// TODO(jayconrod): link to documentation on releasing major versions
 		}
