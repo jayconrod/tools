@@ -118,7 +118,7 @@ func TestRelease(t *testing.T) {
 			configData := data[:sepOffset]
 			want := bytes.TrimSpace(data[wantOffset:])
 
-			var repo, dir, baseVersion, releaseVersion string
+			var dir, baseVersion, releaseVersion string
 			var wantErr, skip bool
 			revision := "master"
 			wantSuccess := true
@@ -138,8 +138,6 @@ func TestRelease(t *testing.T) {
 					value = string(line[i+1:])
 				}
 				switch key {
-				case "repo":
-					repo = value
 				case "dir":
 					dir = value
 				case "revision":
@@ -175,6 +173,7 @@ func TestRelease(t *testing.T) {
 			// Rename the repo first to defeat caching. If the repo is cached, the
 			// commit for HEAD will be saved in memory, even though we change it
 			// on disk.
+			repo := filepath.Base(filepath.Dir(testPath))
 			origRepoDir := filepath.Join(workDir, repo)
 			testSuffix := strings.Replace(testName, "/", "_", -1)
 			repoDir := origRepoDir + "-TestRelease." + testSuffix
