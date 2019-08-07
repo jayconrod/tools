@@ -712,7 +712,11 @@ func (r *gitRepo) RecentTag(rev, prefix, major string) (tag string, err error) {
 	}
 
 	// Git didn't find a version tag preceding the requested rev.
+	// If this is a remote repository, we may be missing some of the history.
 	// See whether any plausible tag exists.
+	if r.local {
+		return "", nil
+	}
 	tags, err := r.Tags(prefix + "v")
 	if err != nil {
 		return "", err

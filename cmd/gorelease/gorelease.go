@@ -36,7 +36,7 @@ import (
 )
 
 // TODO:
-// * Auto-detect base version if -base not set.
+// * Print tag if different from release version.
 // * Test that changes in internal packages aren't listed, unless their types
 //   are expected in non-internal packages.
 // * Tolerate not having a go.mod file.
@@ -140,9 +140,6 @@ func runRelease(cmd *base.Command, args []string) {
 	if len(args) != 0 {
 		base.Fatalf("gorelease: no arguments allowed")
 	}
-	if *baseVersion == "" {
-		base.Fatalf("gorelease: -base not set")
-	}
 	wd, err := os.Getwd()
 	if err != nil {
 		base.Fatalf("gorelease: %v", err)
@@ -171,9 +168,6 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 		} else if cmp > 0 {
 			return report{}, errors.New("-base must be older than -version")
 		}
-	}
-	if baseVersion == "" {
-		return report{}, fmt.Errorf("-base must be set")
 	}
 
 	// Locate the module root and repository root directories.
@@ -216,8 +210,12 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 		return report{}, fmt.Errorf("%s: could not find version suffix in module path", modPath)
 	}
 
-	// Determine the module path prefix for the repository root.
+	// Determine the module path prefix of the repository root (codeRoot)
+	// and the version tag prefix of the current module (tagPrefix).
+	// For example, if the current module is "github.com/a/b/c/v2" defined in
+	// "c/v2/go.mod", codeRoot is "github.com/a/b", and tagPrefix is "c/".
 	codeRoot := modPrefix
+	tagPrefix := ""
 	if modRoot != repoRoot {
 		if strings.HasPrefix(modPathMajor, ".") {
 			return report{}, fmt.Errorf("%s: module path starts with gopkg.in and must be declared in the root directory of the repository", modPath)
@@ -225,15 +223,27 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 		codeDir := filepath.ToSlash(modRoot[len(repoRoot)+1:])
 		var suffix string
 		if modPathMajor == "" || modPathMajor[0] != '/' {
+			// module has no major version suffix or has a gopkg.in-style suffix.
+			// codeDir must be a suffix of modPath
+			// tagPrefix is codeDir with a trailing slash.
 			if !strings.HasSuffix(modPath, "/"+codeDir) {
 				return report{}, fmt.Errorf("%s: module path must end with %[2]q, since it is in subdirectory %[2]q", modPath, codeDir)
 			}
 			suffix = "/" + codeDir
+			tagPrefix = codeDir + "/"
 		} else {
 			if strings.HasSuffix(modPath, "/"+codeDir) {
+				// module has a major version suffix and is in a major version subdirectory.
+				// codeDir must be a suffix of modPath.
+				// tagPrefix must not include the major version.
 				suffix = "/" + codeDir
+				tagPrefix = codeDir[:len(codeDir)-len(modPathMajor)+1]
 			} else if strings.HasSuffix(modPath, "/"+codeDir+modPathMajor) {
+				// module has a major version suffix and is not in a major version subdirectory.
+				// codeDir + modPathMajor is a suffix of modPath.
+				// tagPrefix is codeDir with a trailing slash.
 				suffix = "/" + codeDir + modPathMajor
+				tagPrefix = codeDir + "/"
 			} else {
 				return report{}, fmt.Errorf("%s: module path must end with %[2]q or %q, since it is in subdirectory %[2]q", modPath, codeDir, codeDir+modPathMajor)
 			}
@@ -245,7 +255,8 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 	// major version suffix, and major versions may not be in subdirectories.
 	// This allows major versions to be in different repositories.
 
-	// Check out the old and new versions to temporary directories.
+	// Initialize code host and repo. We use these to access revisions
+	// in the local repository other than HEAD.
 	// TODO(jayconrod): we set the repo directory to be the .git directory itself
 	// since codehost generally expects a bare repository and does some weird
 	// things in the parent directory like creating an info directory.
@@ -260,6 +271,30 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 		return report{}, err
 	}
 
+	// Auto-detect the base version if one wasn't specified.
+	if baseVersion == "" {
+		var baseTag string
+		if modPathMajor != "" {
+			baseTag, err = code.RecentTag("HEAD", tagPrefix, modPathMajor[1:])
+		} else {
+			baseTag, err = code.RecentTag("HEAD", tagPrefix, "v1")
+			if err != nil {
+				baseTag, err = code.RecentTag("HEAD", tagPrefix, "v0")
+			}
+		}
+		if err != nil {
+			return report{}, fmt.Errorf("could not detect base vesion: %v", err)
+		}
+		if baseTag == "" {
+			return report{}, fmt.Errorf("could not detect base version.\nThe -base flag may be used to set it explicitly.")
+		}
+		baseVersion = baseTag[len(tagPrefix):]
+		if releaseVersion != "" && semver.Compare(baseVersion, releaseVersion) >= 0 {
+			return report{}, fmt.Errorf("detected base version %s is not less than release version %s.\nThe -base flag may be used to set it explicitly.", baseVersion, releaseVersion)
+		}
+	}
+
+	// Check out the old and new versions to temporary directories.
 	scratchDir, err := ioutil.TempDir("", "gorelease-")
 	if err != nil {
 		return report{}, err

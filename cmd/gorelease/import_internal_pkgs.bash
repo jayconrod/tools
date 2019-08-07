@@ -41,6 +41,7 @@ for pkg in "${pkgs[@]}"; do
       sed "${edits[@]}" <"$f" >"$to_dir/$(basename "$f")"
     elif [[ -f $f || -d $f && $f =~ /testdata$ ]]; then
       cp -r "$f" "$to_dir/$(basename "$f")"
+      chmod u+w "$to_dir/$(basename "$f")"
     fi
   done
   go fmt "$to_pkg" >/dev/null

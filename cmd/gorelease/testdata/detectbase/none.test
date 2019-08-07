@@ -1,0 +1,6 @@
+repo=detectbase
+revision=none
+error=1
+---
+could not detect base version.
+The -base flag may be used to set it explicitly.
