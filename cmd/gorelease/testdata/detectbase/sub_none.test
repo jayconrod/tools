@@ -3,4 +3,4 @@ dir=sub
 error=1
 ---
 could not detect base version.
-The -base flag may be used to set it explicitly.
+Use the -base flag to set it explicitly.

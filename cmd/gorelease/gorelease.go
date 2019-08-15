@@ -37,14 +37,13 @@ import (
 
 // TODO:
 // Before pushing to x/tools
-// * Print something useful if no base version is found.
 // * Think carefully about wording when suggesting new major version.
 // * Test change in module path.
 // * Check that go.mod is tidy.
 // * Packages import from earlier major version of same module.
 // * Check that proposed prerelease will not sort below pseudo-versions.
 // * Special message if release version does not start with 'v'.
-// * Audit code.
+// * Audit code and documentation.
 // * Audit test coverage.
 // * Audit TODOs and skipped tests.
 // * Audit error messages.
@@ -284,6 +283,8 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 	}
 
 	// Auto-detect the base version if one wasn't specified.
+	// Any checks that don't require comparing versions should be performed
+	// before this point.
 	if baseVersion == "" {
 		var baseTag string
 		if modPathMajor != "" {
@@ -298,11 +299,15 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 			return report{}, fmt.Errorf("could not detect base vesion: %v", err)
 		}
 		if baseTag == "" {
-			return report{}, fmt.Errorf("could not detect base version.\nThe -base flag may be used to set it explicitly.")
+			return report{}, fmt.Errorf("could not detect base version.\nUse the -base flag to set it explicitly.")
 		}
 		baseVersion = baseTag[len(tagPrefix):]
-		if releaseVersion != "" && semver.Compare(baseVersion, releaseVersion) >= 0 {
-			return report{}, fmt.Errorf("detected base version %s is not less than release version %s.\nThe -base flag may be used to set it explicitly.", baseVersion, releaseVersion)
+		if releaseVersion != "" {
+			if cmp := semver.Compare(baseVersion, releaseVersion); cmp == 0 {
+				return report{}, fmt.Errorf("detected base version %s is equal to release version.\nUse the -base flag to set the base version explicitly.", baseVersion)
+			} else if cmp > 0 {
+				return report{}, fmt.Errorf("detected base version %s is greater than release version %s.\nUse the -base flag to set the base version explicitly.", baseVersion, releaseVersion)
+			}
 		}
 	}
 
