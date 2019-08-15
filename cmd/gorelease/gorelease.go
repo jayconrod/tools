@@ -37,7 +37,6 @@ import (
 
 // TODO:
 // Before pushing to x/tools
-// * Think carefully about wording when suggesting new major version.
 // * Test change in module path.
 // * Check that go.mod is tidy.
 // * Packages import from earlier major version of same module.
@@ -285,7 +284,8 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 	// Auto-detect the base version if one wasn't specified.
 	// Any checks that don't require comparing versions should be performed
 	// before this point.
-	if baseVersion == "" {
+	shouldCompare := baseVersion != "" || !likelyFirstVersion(releaseVersion)
+	if baseVersion == "" && shouldCompare {
 		var baseTag string
 		if modPathMajor != "" {
 			baseTag, err = code.RecentTag("HEAD", tagPrefix, modPathMajor[1:])
@@ -318,17 +318,22 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 	}
 	defer os.RemoveAll(scratchDir)
 
-	oldPkgs, err := checkoutAndLoad(repo, baseVersion, modData, scratchDir)
-	if err != nil {
-		return report{}, err
-	}
 	newPkgs, err := checkoutAndLoad(repo, "HEAD", modData, scratchDir)
 	if err != nil {
 		return report{}, err
 	}
+	var oldPkgs []*packages.Package
+	if shouldCompare {
+		oldPkgs, err = checkoutAndLoad(repo, baseVersion, modData, scratchDir)
+		if err != nil {
+			return report{}, err
+		}
+	}
 
 	// Compare each pair of packages.
 	// Ignore internal packages.
+	// If we don't have a base version to compare against, just check the new
+	// packages for errors.
 	isInternal := func(pkgPath string) bool {
 		if !str.HasPathPrefix(pkgPath, modPath) {
 			panic(fmt.Sprintf("package %s not in module %s", pkgPath, modPath))
@@ -350,36 +355,49 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 	}
 	for oldIndex < len(oldPkgs) || newIndex < len(newPkgs) {
 		if oldIndex < len(oldPkgs) && (newIndex == len(newPkgs) || oldPkgs[oldIndex].PkgPath < newPkgs[newIndex].PkgPath) {
-			if !isInternal(oldPkgs[oldIndex].PkgPath) {
-				r.addPackage(PackageReport{
-					Path:      oldPkgs[oldIndex].PkgPath,
-					OldErrors: oldPkgs[oldIndex].Errors,
-					Report: apidiff.Report{
+			oldPkg := oldPkgs[oldIndex]
+			oldIndex++
+			if !isInternal(oldPkg.PkgPath) || len(oldPkg.Errors) > 0 {
+				pr := PackageReport{
+					Path:      oldPkg.PkgPath,
+					OldErrors: oldPkg.Errors,
+				}
+				if !isInternal(oldPkg.PkgPath) {
+					pr.Report = apidiff.Report{
 						Changes: []apidiff.Change{{
 							Message:    "package removed",
 							Compatible: false,
 						}},
-					},
-				})
+					}
+				}
+				r.addPackage(pr)
 			}
-			oldIndex++
 		} else if newIndex < len(newPkgs) && (oldIndex == len(oldPkgs) || newPkgs[newIndex].PkgPath < oldPkgs[oldIndex].PkgPath) {
-			if !isInternal(newPkgs[newIndex].PkgPath) {
-				r.addPackage(PackageReport{
-					Path:      newPkgs[newIndex].PkgPath,
-					NewErrors: newPkgs[newIndex].Errors,
-					Report: apidiff.Report{
-						Changes: []apidiff.Change{{
-							Message:    "package added",
-							Compatible: true,
-						}},
-					},
-				})
-			}
+			newPkg := newPkgs[newIndex]
 			newIndex++
+			if isInternal(newPkg.PkgPath) && len(newPkg.Errors) == 0 && !shouldCompare {
+				// If we aren't comparing against a base version, don't say
+				// "package added". Only report packages with errors.
+				continue
+			}
+			pr := PackageReport{
+				Path:      newPkg.PkgPath,
+				NewErrors: newPkg.Errors,
+			}
+			if !isInternal(newPkg.PkgPath) && shouldCompare {
+				pr.Report = apidiff.Report{
+					Changes: []apidiff.Change{{
+						Message:    "package added",
+						Compatible: true,
+					}},
+				}
+			}
+			r.addPackage(pr)
 		} else {
 			oldPkg := oldPkgs[oldIndex]
 			newPkg := newPkgs[newIndex]
+			oldIndex++
+			newIndex++
 			if !isInternal(oldPkg.PkgPath) {
 				pr := PackageReport{
 					Path:      oldPkg.PkgPath,
@@ -391,8 +409,6 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 				}
 				r.addPackage(pr)
 			}
-			oldIndex++
-			newIndex++
 		}
 	}
 
@@ -490,6 +506,38 @@ func dirMajorSuffix(path string) string {
 	return path[i-1:]
 }
 
+// likelyFirstVersion returns whether vers is likely the first version for
+// a given major version.
+func likelyFirstVersion(vers string) bool {
+	_, minor, patch, err := splitVersionNumbers(vers)
+	if err != nil {
+		return false
+	}
+	return minor == "0" && patch == "0" || vers == "v0.1.0" || vers == "v0.0.1"
+}
+
+// splitVersionNumbers returns the major, minor, and patch numbers for a given
+// version.
+//
+// TODO(jayconrod): extend semver to do this and delete this function.
+func splitVersionNumbers(vers string) (major, minor, patch string, err error) {
+	if !strings.HasPrefix(vers, "v") {
+		return "", "", "", fmt.Errorf("version %q does not start with 'v'", vers)
+	}
+	base := vers[1:]
+	if i := strings.IndexByte(vers, '-'); i >= 0 {
+		base = base[:i] // trim prerelease
+	}
+	if i := strings.IndexByte(vers, '+'); i >= 0 {
+		base = base[:i] // trim build
+	}
+	parts := strings.Split(base, ".")
+	if len(parts) != 3 {
+		return "", "", "", fmt.Errorf("version %q should have three numbers", vers)
+	}
+	return parts[0], parts[1], parts[2], nil
+}
+
 // checkoutAndLoad extracts a specific revision of a module to a temporary
 // directory, then loads type information for packages within the module.
 //
@@ -580,15 +628,21 @@ func (r *report) Text(w io.Writer) error {
 				summary = fmt.Sprintf("%[2]s (with tag %[1]s%[2]s) is a valid semantic version for this release", r.tagPrefix, r.releaseVersion)
 			}
 		}
+	} else if r.haveErrors {
+		summary = "Errors were detected, so no version will be suggested."
+	} else if r.haveIncompatibleChanges && r.baseVersion != "" && semver.Major(r.baseVersion) != "v0" {
+		suggestedVersion := r.suggestVersion()
+		summary = fmt.Sprintf(`Incompatible changes detected, so no version will be suggested.
+Use -release=%s to verify a new major version.
+Avoid creating new major versions if possible though.
+`, suggestedVersion)
+		// TODO(jayconrod): link to documentation on releasing major versions
 	} else {
 		suggestedVersion := r.suggestVersion()
 		if r.tagPrefix == "" {
 			summary = fmt.Sprintf("Suggested version: %s", suggestedVersion)
 		} else {
 			summary = fmt.Sprintf("Suggested version: %[2]s (with tag %[1]s%[2]s)", r.tagPrefix, suggestedVersion)
-		}
-		if r.haveIncompatibleChanges {
-			// TODO(jayconrod): link to documentation on releasing major versions
 		}
 	}
 	if _, err := fmt.Fprintln(w, summary); err != nil {
@@ -606,9 +660,9 @@ func (r *report) addPackage(p PackageReport) {
 		} else {
 			r.haveIncompatibleChanges = true
 		}
-		if len(p.NewErrors) > 0 {
-			r.haveErrors = true
-		}
+	}
+	if len(p.NewErrors) > 0 {
+		r.haveErrors = true
 	}
 }
 
@@ -644,7 +698,7 @@ in the module path: %s`, r.releaseVersion, r.modulePath, major)
 		}
 	} else if major := semver.Major(r.releaseVersion); major != "v0" && major != "v1" {
 		return fmt.Errorf(`%s is not a valid semantic version for this release.
-The module path does not end with a major version suffix like /%s,
+The module path does not end with the major version suffix /%s,
 which is required for major versions v2 or greater.`, r.releaseVersion, major)
 	}
 
@@ -667,18 +721,10 @@ are the same as the base version %s.`, r.releaseVersion, r.baseVersion)
 
 // suggestVersion suggests a new version consistent with observed changes.
 func (r *report) suggestVersion() string {
-	base := r.baseVersion[1:] // trim 'v'
-	if i := strings.IndexByte(base, '-'); i >= 0 {
-		base = base[:i] // trim prerelease
+	major, minor, patch, err := splitVersionNumbers(r.baseVersion)
+	if err != nil {
+		panic(fmt.Sprintf("could not parse base version: %v", err))
 	}
-	if i := strings.IndexByte(base, '+'); i >= 0 {
-		base = base[:i] // trim build
-	}
-	parts := strings.Split(base, ".")
-	if len(parts) != 3 {
-		panic(fmt.Sprintf("could not parse version %s", r.baseVersion))
-	}
-	major, minor, patch := parts[0], parts[1], parts[2]
 
 	if r.haveIncompatibleChanges && major != "0" {
 		major = incDecimal(major)

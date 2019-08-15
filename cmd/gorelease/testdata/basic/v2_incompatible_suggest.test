@@ -12,4 +12,6 @@ example.com/basic/v2/b
 Incompatible changes:
 - package removed
 
-Suggested version: v3.0.0
+Incompatible changes detected, so no version will be suggested.
+Use -release=v3.0.0 to verify a new major version.
+Avoid creating new major versions if possible though.

@@ -118,8 +118,8 @@ func TestRelease(t *testing.T) {
 			configData := data[:sepOffset]
 			want := bytes.TrimSpace(data[wantOffset:])
 
-			var dir, baseVersion, releaseVersion string
-			var wantErr, skip bool
+			var dir, baseVersion, releaseVersion, skip string
+			var wantErr bool
 			revision := "master"
 			wantSuccess := true
 			for lineNum, line := range bytes.Split(configData, []byte("\n")) {
@@ -153,10 +153,7 @@ func TestRelease(t *testing.T) {
 						t.Fatalf("%s:%d: %v", testPath, lineNum+1, err)
 					}
 				case "skip":
-					skip, err = strconv.ParseBool(value)
-					if err != nil {
-						t.Fatalf("%s:%d: %v", testPath, lineNum+1, err)
-					}
+					skip = value
 				case "base":
 					baseVersion = value
 				case "version":
@@ -165,8 +162,14 @@ func TestRelease(t *testing.T) {
 					t.Fatalf("%s:%d: unknown key: %q", testPath, lineNum+1, key)
 				}
 			}
-			if skip {
-				t.Skip(string(want))
+			if skip != "" {
+				if b, err := strconv.ParseBool(skip); err == nil {
+					if b {
+						t.Skip(string(want))
+					}
+				} else {
+					t.Skip(skip)
+				}
 			}
 
 			// Checkout the target version.
