@@ -36,8 +36,6 @@ import (
 )
 
 // TODO:
-// * Test that changes in internal packages aren't listed, unless their types
-//   are expected in non-internal packages.
 // * Tolerate not having a go.mod file.
 // * Test that a go.mod file is not required for base version.
 // * Print something useful if no base version is found.
@@ -310,6 +308,19 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 	}
 
 	// Compare each pair of packages.
+	// Ignore internal packages.
+	isInternal := func(pkgPath string) bool {
+		if !str.HasPathPrefix(pkgPath, modPath) {
+			panic(fmt.Sprintf("package %s not in module %s", pkgPath, modPath))
+		}
+		for pkgPath != modPath {
+			if path.Base(pkgPath) == "internal" {
+				return true
+			}
+			pkgPath = path.Dir(pkgPath)
+		}
+		return false
+	}
 	oldIndex, newIndex := 0, 0
 	r := report{
 		modulePath:     modPath,
@@ -319,41 +330,47 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 	}
 	for oldIndex < len(oldPkgs) || newIndex < len(newPkgs) {
 		if oldIndex < len(oldPkgs) && (newIndex == len(newPkgs) || oldPkgs[oldIndex].PkgPath < newPkgs[newIndex].PkgPath) {
-			r.addPackage(PackageReport{
-				Path:      oldPkgs[oldIndex].PkgPath,
-				OldErrors: oldPkgs[oldIndex].Errors,
-				Report: apidiff.Report{
-					Changes: []apidiff.Change{{
-						Message:    "package removed",
-						Compatible: false,
-					}},
-				},
-			})
+			if !isInternal(oldPkgs[oldIndex].PkgPath) {
+				r.addPackage(PackageReport{
+					Path:      oldPkgs[oldIndex].PkgPath,
+					OldErrors: oldPkgs[oldIndex].Errors,
+					Report: apidiff.Report{
+						Changes: []apidiff.Change{{
+							Message:    "package removed",
+							Compatible: false,
+						}},
+					},
+				})
+			}
 			oldIndex++
 		} else if newIndex < len(newPkgs) && (oldIndex == len(oldPkgs) || newPkgs[newIndex].PkgPath < oldPkgs[oldIndex].PkgPath) {
-			r.addPackage(PackageReport{
-				Path:      newPkgs[newIndex].PkgPath,
-				NewErrors: newPkgs[newIndex].Errors,
-				Report: apidiff.Report{
-					Changes: []apidiff.Change{{
-						Message:    "package added",
-						Compatible: true,
-					}},
-				},
-			})
+			if !isInternal(newPkgs[newIndex].PkgPath) {
+				r.addPackage(PackageReport{
+					Path:      newPkgs[newIndex].PkgPath,
+					NewErrors: newPkgs[newIndex].Errors,
+					Report: apidiff.Report{
+						Changes: []apidiff.Change{{
+							Message:    "package added",
+							Compatible: true,
+						}},
+					},
+				})
+			}
 			newIndex++
 		} else {
 			oldPkg := oldPkgs[oldIndex]
 			newPkg := newPkgs[newIndex]
-			pr := PackageReport{
-				Path:      oldPkg.PkgPath,
-				OldErrors: oldPkg.Errors,
-				NewErrors: newPkg.Errors,
+			if !isInternal(oldPkg.PkgPath) {
+				pr := PackageReport{
+					Path:      oldPkg.PkgPath,
+					OldErrors: oldPkg.Errors,
+					NewErrors: newPkg.Errors,
+				}
+				if len(oldPkg.Errors) == 0 && len(newPkg.Errors) == 0 {
+					pr.Report = apidiff.Changes(oldPkg.Types, newPkg.Types)
+				}
+				r.addPackage(pr)
 			}
-			if len(oldPkg.Errors) == 0 && len(newPkg.Errors) == 0 {
-				pr.Report = apidiff.Changes(oldPkg.Types, newPkg.Types)
-			}
-			r.addPackage(pr)
 			oldIndex++
 			newIndex++
 		}
@@ -442,7 +459,7 @@ func checkoutAndLoad(repo fakemodfetch.Repo, version, scratchDir string) ([]*pac
 		return nil, err
 	}
 
-	loadMode := packages.NeedName | packages.NeedTypes | packages.NeedImports | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes
+	loadMode := packages.NeedName | packages.NeedTypes | packages.NeedImports | packages.NeedDeps
 	cfg := &packages.Config{
 		Mode: loadMode,
 		Dir:  dir,
