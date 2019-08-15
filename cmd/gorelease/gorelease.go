@@ -285,7 +285,7 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 	// Any checks that don't require comparing versions should be performed
 	// before this point.
 	shouldCompare := baseVersion != "" || !likelyFirstVersion(releaseVersion)
-	if baseVersion == "" && shouldCompare {
+	if baseVersion == "" {
 		var baseTag string
 		if modPathMajor != "" {
 			baseTag, err = code.RecentTag("HEAD", tagPrefix, modPathMajor[1:])
@@ -295,18 +295,23 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 				baseTag, err = code.RecentTag("HEAD", tagPrefix, "v0")
 			}
 		}
-		if err != nil {
-			return report{}, fmt.Errorf("could not detect base vesion: %v", err)
-		}
-		if baseTag == "" {
-			return report{}, fmt.Errorf("could not detect base version.\nUse the -base flag to set it explicitly.")
-		}
-		baseVersion = baseTag[len(tagPrefix):]
-		if releaseVersion != "" {
-			if cmp := semver.Compare(baseVersion, releaseVersion); cmp == 0 {
-				return report{}, fmt.Errorf("detected base version %s is equal to release version.\nUse the -base flag to set the base version explicitly.", baseVersion)
-			} else if cmp > 0 {
-				return report{}, fmt.Errorf("detected base version %s is greater than release version %s.\nUse the -base flag to set the base version explicitly.", baseVersion, releaseVersion)
+		if baseTag != "" && err == nil {
+			baseVersion = baseTag[len(tagPrefix):]
+			if releaseVersion != "" {
+				if cmp := semver.Compare(baseVersion, releaseVersion); cmp == 0 {
+					return report{}, fmt.Errorf("detected base version %s is equal to release version.\nUse the -base flag to set the base version explicitly.", baseVersion)
+				} else if cmp > 0 {
+					return report{}, fmt.Errorf("detected base version %s is greater than release version %s.\nUse the -base flag to set the base version explicitly.", baseVersion, releaseVersion)
+				}
+			}
+		} else if shouldCompare {
+			// If we couldn't detect a base version, only report an error if
+			// releaseVersion looks like it's not the first version for this module.
+			if err != nil {
+				return report{}, fmt.Errorf("could not detect base vesion: %v", err)
+			}
+			if baseTag == "" {
+				return report{}, fmt.Errorf("could not detect base version.\nUse the -base flag to set it explicitly.")
 			}
 		}
 	}
