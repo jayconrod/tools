@@ -37,7 +37,6 @@ import (
 
 // TODO:
 // Before pushing to x/tools
-// * Test that a go.mod file is not required for base version.
 // * Print something useful if no base version is found.
 // * Think carefully about wording when suggesting new major version.
 // * Test change in module path.
@@ -45,16 +44,20 @@ import (
 // * Packages import from earlier major version of same module.
 // * Check that proposed prerelease will not sort below pseudo-versions.
 // * Special message if release version does not start with 'v'.
+// * Audit code.
+// * Audit test coverage.
 // * Audit TODOs and skipped tests.
 // * Audit error messages.
 // * Try on popular repos.
 //
 // After pushing to x/tools
+// * First version of nested module.
 // * Error messages point to HTML documentation.
 // * Positional arguments should specify which packages to check. Without
 //   these, we check all non-internal packages in the module.
 // * Nested module doesn't require parent.
 // * Mechanism to suppress error messages.
+// * Support for other VCS tools.
 
 var CmdRelease = &base.Command{
 	UsageLine: "gorelease [-base version] [-version version]",
@@ -287,7 +290,7 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 			baseTag, err = code.RecentTag("HEAD", tagPrefix, modPathMajor[1:])
 		} else {
 			baseTag, err = code.RecentTag("HEAD", tagPrefix, "v1")
-			if err != nil {
+			if baseTag == "" || err != nil {
 				baseTag, err = code.RecentTag("HEAD", tagPrefix, "v0")
 			}
 		}
@@ -310,11 +313,11 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 	}
 	defer os.RemoveAll(scratchDir)
 
-	oldPkgs, err := checkoutAndLoad(repo, baseVersion, scratchDir)
+	oldPkgs, err := checkoutAndLoad(repo, baseVersion, modData, scratchDir)
 	if err != nil {
 		return report{}, err
 	}
-	newPkgs, err := checkoutAndLoad(repo, "HEAD", scratchDir)
+	newPkgs, err := checkoutAndLoad(repo, "HEAD", modData, scratchDir)
 	if err != nil {
 		return report{}, err
 	}
@@ -482,14 +485,39 @@ func dirMajorSuffix(path string) string {
 	return path[i-1:]
 }
 
-func checkoutAndLoad(repo fakemodfetch.Repo, version, scratchDir string) ([]*packages.Package, error) {
+// checkoutAndLoad extracts a specific revision of a module to a temporary
+// directory, then loads type information for packages within the module.
+//
+// repo is an interface to access the module.
+//
+// rev is the revision to check out.
+//
+// goMod is the contents of the go.mod file at HEAD. If a go.mod file is not
+// present at rev, one will be written with these contents. This will let us
+// load packages with similar versions of dependencies (as opposed to the
+// latest version of everything). However, missing modules will be added at
+// their latest versions, which may upgrade other dependencies.
+//
+// scratchDir is a temporary directory. checkoutAndLoad will check out the
+// source to a subdirectory named after rev. The caller is responsible for
+// deleting scratchDir, even when an error occurs.
+func checkoutAndLoad(repo fakemodfetch.Repo, rev string, goMod []byte, scratchDir string) ([]*packages.Package, error) {
 	// TODO: ensure a go.mod is present, even if one was not present
 	// in the original version. Without this, we won't be able to load packages.
-	dir, err := fakemodfetch.Checkout(repo, version, scratchDir)
+	dir, err := fakemodfetch.Checkout(repo, rev, scratchDir)
 	if err != nil {
 		return nil, err
 	}
 
+	// Write go.mod if it's not present.
+	goModPath := filepath.Join(dir, "go.mod")
+	if _, err := os.Stat(goModPath); os.IsNotExist(err) {
+		if err := ioutil.WriteFile(goModPath, goMod, 0666); err != nil {
+			return nil, err
+		}
+	}
+
+	// Load all packages in the module and transitive dependencies.
 	loadMode := packages.NeedName | packages.NeedTypes | packages.NeedImports | packages.NeedDeps
 	cfg := &packages.Config{
 		Mode: loadMode,
