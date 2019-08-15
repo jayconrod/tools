@@ -36,13 +36,25 @@ import (
 )
 
 // TODO:
-// * Tolerate not having a go.mod file.
+// Before pushing to x/tools
+// * Check that module path is valid for 'go get'.
 // * Test that a go.mod file is not required for base version.
 // * Print something useful if no base version is found.
-// * Print tag, including submodule prefix.
+// * Think carefully about wording when suggesting new major version.
+// * Test change in module path.
+// * Check that go.mod is tidy.
+// * Packages import from earlier major version of same module.
+// * Check that proposed prerelease will not sort below pseudo-versions.
+// * Special message if release version does not start with 'v'.
+// * Audit TODOs and skipped tests.
+// * Audit error messages.
+//
+// After pushing to x/tools
+// * Error messages point to HTML documentation.
 // * Positional arguments should specify which packages to check. Without
 //   these, we check all non-internal packages in the module.
-// * Think carefully about wording when suggesting new major version.
+// * Nested module doesn't require parent.
+// * Mechanism to suppress error messages.
 
 var CmdRelease = &base.Command{
 	UsageLine: "gorelease [-base version] [-version version]",
