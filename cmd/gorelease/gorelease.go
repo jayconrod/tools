@@ -37,7 +37,6 @@ import (
 
 // TODO:
 // Before pushing to x/tools
-// * Check that module path is valid for 'go get'.
 // * Test that a go.mod file is not required for base version.
 // * Print something useful if no base version is found.
 // * Think carefully about wording when suggesting new major version.
@@ -48,6 +47,7 @@ import (
 // * Special message if release version does not start with 'v'.
 // * Audit TODOs and skipped tests.
 // * Audit error messages.
+// * Try on popular repos.
 //
 // After pushing to x/tools
 // * Error messages point to HTML documentation.
@@ -210,8 +210,8 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 		return report{}, fmt.Errorf("no module statement in %s", goModPath)
 	}
 	modPath := modFile.Module.Mod.Path
-	if path.IsAbs(modPath) || filepath.IsAbs(modPath) {
-		return report{}, fmt.Errorf("module path %q may not be an absolute path.\nIt must be an address where your module may be found.", modPath)
+	if err := checkModPath(modPath); err != nil {
+		return report{}, err
 	}
 	// TODO(jayconrod): check for invalid characters.
 	modPrefix, modPathMajor, ok := module.SplitPathVersion(modPath)
@@ -443,6 +443,25 @@ func repoHasPendingChanges(root string) error {
 		return errors.New("there are uncommitted changes in the current repository")
 	}
 	return nil
+}
+
+// checkModPath is like golang.org/x/mod/module.CheckPath, but it returns
+// friendlier error messages for common mistakes.
+//
+// TODO(jayconrod): update module.CheckPath and delete this function.
+func checkModPath(modPath string) error {
+	if path.IsAbs(modPath) || filepath.IsAbs(modPath) {
+		// TODO(jayconrod): improve error message in x/mod instead of checking here.
+		return fmt.Errorf("module path %q may not be an absolute path.\nIt must be an address where your module may be found.", modPath)
+	}
+	if suffix := dirMajorSuffix(modPath); suffix == "v0" || suffix == "v1" {
+		return fmt.Errorf("module path %q has major version suffix %q.\nA major version suffix is only allowed for v2 or later.", modPath, suffix)
+	} else if strings.HasPrefix(suffix, "v0") {
+		return fmt.Errorf("module path %q has major version suffix %q.\nA major version may not have a leading zero.", modPath, suffix)
+	} else if strings.ContainsRune(suffix, '.') {
+		return fmt.Errorf("module path %q has major version suffix %q.\nA major version may not contain dots.", modPath, suffix)
+	}
+	return module.CheckPath(modPath)
 }
 
 // dirMajorSuffix returns a major version suffix for a slash-separated path.

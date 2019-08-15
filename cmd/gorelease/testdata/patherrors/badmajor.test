@@ -2,4 +2,5 @@ revision=badmajor
 base=v0.0.0
 error=true
 ---
-example.com/patherrors/v0: could not find version suffix in module path
+module path "example.com/patherrors/v0" has major version suffix "v0".
+A major version suffix is only allowed for v2 or later.
