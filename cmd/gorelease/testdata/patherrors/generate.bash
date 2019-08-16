@@ -52,5 +52,15 @@ EOF
 git commit -am pathsubv2
 git tag pathsubv2
 
+# example.com/{a,b}: module path is valid but changes
+git rm -r x
+echo 'module example.com/a' >go.mod
+git add go.mod
+git commit -m valid-a
+git tag v0.0.1
+echo 'module example.com/b' >go.mod
+git commit -am valid-b
+git tag valid-b
+
 # Package the repository
 repo_pack

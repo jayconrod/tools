@@ -37,7 +37,6 @@ import (
 
 // TODO:
 // Before pushing to x/tools
-// * Test change in module path.
 // * Check that go.mod is tidy.
 // * Packages import from earlier major version of same module.
 // * Check that proposed prerelease will not sort below pseudo-versions.
@@ -46,6 +45,7 @@ import (
 // * Audit test coverage.
 // * Audit TODOs and skipped tests.
 // * Audit error messages.
+// * Restrict to go1.13.
 // * Try on popular repos.
 //
 // After pushing to x/tools
@@ -550,11 +550,13 @@ func splitVersionNumbers(vers string) (major, minor, patch string, err error) {
 //
 // rev is the revision to check out.
 //
-// goMod is the contents of the go.mod file at HEAD. If a go.mod file is not
-// present at rev, one will be written with these contents. This will let us
+// goMod is the contents of the go.mod file at HEAD. If go.mod is present
+// at rev, checkoutAndLoad will verify it has the same module path. If go.mod
+// is not present, it written with these contents. This will let us
 // load packages with similar versions of dependencies (as opposed to the
 // latest version of everything). However, missing modules will be added at
-// their latest versions, which may upgrade other dependencies.
+// their latest versions, which may upgrade other dependencies. goMod may be
+// nil if we are checking out HEAD.
 //
 // scratchDir is a temporary directory. checkoutAndLoad will check out the
 // source to a subdirectory named after rev. The caller is responsible for
@@ -567,11 +569,26 @@ func checkoutAndLoad(repo fakemodfetch.Repo, rev string, goMod []byte, scratchDi
 		return nil, err
 	}
 
-	// Write go.mod if it's not present.
+	// If go.mod is not present, write a copy from HEAD to ensure we can load packages.
+	// If it is present, verify the module path has not changed.
 	goModPath := filepath.Join(dir, "go.mod")
+	var modPathErr error
 	if _, err := os.Stat(goModPath); os.IsNotExist(err) {
 		if err := ioutil.WriteFile(goModPath, goMod, 0666); err != nil {
 			return nil, err
+		}
+	} else if goMod != nil {
+		// goMod != nil indicates this is not HEAD and we should verify the path.
+		goModData, err := ioutil.ReadFile(goModPath)
+		if err != nil {
+			return nil, fmt.Errorf("could not read go.mod in revision %s: %v", rev, err)
+		}
+		modFile, err := modfile.ParseLax(goModPath, goModData, nil)
+		if err != nil || modFile.Module == nil {
+			return nil, fmt.Errorf("could not parse go.mod in revision %s: %v", rev, err)
+		}
+		if modFile.Module.Mod.Path != repo.ModulePath() {
+			return nil, fmt.Errorf("module path changed in go.mod\nfrom: %s (at revision %s)\n  to: %s", modFile.Module.Mod.Path, rev, repo.ModulePath())
 		}
 	}
 
@@ -601,7 +618,7 @@ func checkoutAndLoad(repo fakemodfetch.Repo, rev string, goMod []byte, scratchDi
 		}
 	}
 
-	return pkgs, nil
+	return pkgs, modPathErr
 }
 
 type report struct {
