@@ -21,7 +21,11 @@ git commit -m v0.0.1
 git tag v0.0.1
 
 # v0.0.2: add root go.mod
-echo 'module example.com/nomod' >go.mod
+cat >go.mod <<EOF
+module example.com/nomod
+
+go 1.13
+EOF
 git add go.mod
 git commit -m v0.0.2
 git tag v0.0.2

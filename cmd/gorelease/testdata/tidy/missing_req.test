@@ -1,0 +1,5 @@
+revision=missing_req
+success=false
+---
+go.mod is not tidy. Run 'go mod tidy'.
+go.sum is not committed to version control.

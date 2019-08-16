@@ -13,7 +13,11 @@ source ../repo_functions.bash
 repo_create
 
 # v0, v1
-echo 'module example.com/first' >go.mod
+cat >go.mod <<EOF
+module example.com/first
+
+go 1.13
+EOF
 echo 'package p' >p.go
 git add -A
 git commit -m v0
@@ -26,7 +30,11 @@ git tag v0_err
 
 # v2
 git checkout v0 p.go
-echo 'module example.com/first/v2' >go.mod
+cat >go.mod <<EOF
+module example.com/first/v2
+
+go 1.13
+EOF
 git commit -am v2
 git tag v2
 

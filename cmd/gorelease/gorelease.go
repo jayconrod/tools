@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -37,18 +38,17 @@ import (
 
 // TODO:
 // Before pushing to x/tools
-// * Check that go.mod is tidy.
-// * Packages import from earlier major version of same module.
-// * Check that proposed prerelease will not sort below pseudo-versions.
 // * Special message if release version does not start with 'v'.
 // * Audit code and documentation.
 // * Audit test coverage.
 // * Audit TODOs and skipped tests.
 // * Audit error messages.
 // * Restrict to go1.13.
-// * Try on popular repos.
+// * Try on more real world examples.
 //
 // After pushing to x/tools
+// * Packages import from earlier major version of same module.
+// * Check that proposed prerelease will not sort below pseudo-versions.
 // * First version of nested module.
 // * Error messages point to HTML documentation.
 // * Positional arguments should specify which packages to check. Without
@@ -323,13 +323,13 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 	}
 	defer os.RemoveAll(scratchDir)
 
-	newPkgs, err := checkoutAndLoad(repo, "HEAD", modData, scratchDir)
+	newPkgs, diagnostics, err := checkoutAndLoad(repo, "HEAD", nil, scratchDir)
 	if err != nil {
 		return report{}, err
 	}
 	var oldPkgs []*packages.Package
 	if shouldCompare {
-		oldPkgs, err = checkoutAndLoad(repo, baseVersion, modData, scratchDir)
+		oldPkgs, _, err = checkoutAndLoad(repo, baseVersion, modData, scratchDir)
 		if err != nil {
 			return report{}, err
 		}
@@ -357,6 +357,7 @@ func makeReleaseReport(dir, baseVersion, releaseVersion string) (report, error) 
 		baseVersion:    baseVersion,
 		releaseVersion: releaseVersion,
 		tagPrefix:      tagPrefix,
+		diagnostics:    diagnostics,
 	}
 	for oldIndex < len(oldPkgs) || newIndex < len(newPkgs) {
 		if oldIndex < len(oldPkgs) && (newIndex == len(newPkgs) || oldPkgs[oldIndex].PkgPath < newPkgs[newIndex].PkgPath) {
@@ -550,45 +551,67 @@ func splitVersionNumbers(vers string) (major, minor, patch string, err error) {
 //
 // rev is the revision to check out.
 //
-// goMod is the contents of the go.mod file at HEAD. If go.mod is present
-// at rev, checkoutAndLoad will verify it has the same module path. If go.mod
-// is not present, it written with these contents. This will let us
+// goMod is the contents of the go.mod file at the release revision (HEAD).
+// If rev is the release revision, goMod should be nil. Otherwise, if a go.mod
+// file is not present, one will be written with these contents. This lets us
 // load packages with similar versions of dependencies (as opposed to the
 // latest version of everything). However, missing modules will be added at
-// their latest versions, which may upgrade other dependencies. goMod may be
-// nil if we are checking out HEAD.
+// their latest versions, which may upgrade other dependencies.
 //
 // scratchDir is a temporary directory. checkoutAndLoad will check out the
 // source to a subdirectory named after rev. The caller is responsible for
 // deleting scratchDir, even when an error occurs.
-func checkoutAndLoad(repo fakemodfetch.Repo, rev string, goMod []byte, scratchDir string) ([]*packages.Package, error) {
+func checkoutAndLoad(repo fakemodfetch.Repo, rev string, goMod []byte, scratchDir string) (pkgs []*packages.Package, diagnostics []string, err error) {
 	// TODO: ensure a go.mod is present, even if one was not present
 	// in the original version. Without this, we won't be able to load packages.
 	dir, err := fakemodfetch.Checkout(repo, rev, scratchDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// If go.mod is not present, write a copy from HEAD to ensure we can load packages.
-	// If it is present, verify the module path has not changed.
+	// Verify or write go.mod, depending on what version this is.
 	goModPath := filepath.Join(dir, "go.mod")
-	var modPathErr error
-	if _, err := os.Stat(goModPath); os.IsNotExist(err) {
-		if err := ioutil.WriteFile(goModPath, goMod, 0666); err != nil {
-			return nil, err
+	goSumPath := filepath.Join(dir, "go.sum")
+	var origGoMod, origGoSum []byte
+	var haveOrigGoSum bool
+	if goMod != nil {
+		// goMod != nil indicates this is the base version.
+		if _, err := os.Stat(goModPath); os.IsNotExist(err) {
+			if err := ioutil.WriteFile(goModPath, goMod, 0666); err != nil {
+				return nil, nil, err
+			}
+		} else if err != nil {
+			return nil, nil, err
+		} else {
+			// Check that the module path matches the expected path.
+			goModData, err := ioutil.ReadFile(goModPath)
+			if err != nil {
+				return nil, nil, fmt.Errorf("could not read go.mod in revision %s: %v", rev, err)
+			}
+			modFile, err := modfile.ParseLax(goModPath, goModData, nil)
+			if err != nil || modFile.Module == nil {
+				return nil, nil, fmt.Errorf("could not parse go.mod in revision %s: %v", rev, err)
+			}
+			if modFile.Module.Mod.Path != repo.ModulePath() {
+				return nil, nil, fmt.Errorf("module path changed in go.mod\nfrom: %s (at revision %s)\n  to: %s", modFile.Module.Mod.Path, rev, repo.ModulePath())
+			}
 		}
-	} else if goMod != nil {
-		// goMod != nil indicates this is not HEAD and we should verify the path.
-		goModData, err := ioutil.ReadFile(goModPath)
+	} else {
+		// goMod == nil indicates this is the release version.
+		// Load go.mod and go.sum so we can compare them later.
+		// go.sum may not exist if the module doesn't depend on other modules.
+		origGoMod, err = ioutil.ReadFile(goModPath)
 		if err != nil {
-			return nil, fmt.Errorf("could not read go.mod in revision %s: %v", rev, err)
+			return nil, nil, fmt.Errorf("could not read go.mod in revision %s: %v", rev, err)
 		}
-		modFile, err := modfile.ParseLax(goModPath, goModData, nil)
-		if err != nil || modFile.Module == nil {
-			return nil, fmt.Errorf("could not parse go.mod in revision %s: %v", rev, err)
-		}
-		if modFile.Module.Mod.Path != repo.ModulePath() {
-			return nil, fmt.Errorf("module path changed in go.mod\nfrom: %s (at revision %s)\n  to: %s", modFile.Module.Mod.Path, rev, repo.ModulePath())
+		goSumPath := filepath.Join(dir, "go.sum")
+		origGoSum, err = ioutil.ReadFile(goSumPath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return nil, nil, fmt.Errorf("could not read go.sum in revision %s: %v", rev, err)
+			}
+		} else {
+			haveOrigGoSum = true
 		}
 	}
 
@@ -598,9 +621,9 @@ func checkoutAndLoad(repo fakemodfetch.Repo, rev string, goMod []byte, scratchDi
 		Mode: loadMode,
 		Dir:  dir,
 	}
-	pkgs, err := packages.Load(cfg, "./...")
+	pkgs, err = packages.Load(cfg, "./...")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].PkgPath < pkgs[j].PkgPath })
 
@@ -618,13 +641,39 @@ func checkoutAndLoad(repo fakemodfetch.Repo, rev string, goMod []byte, scratchDi
 		}
 	}
 
-	return pkgs, modPathErr
+	// If this is the release, version, check that loading packages did not modify
+	// go.mod or go.sum.
+	if origGoMod != nil {
+		var goModUntidy bool
+		newGoMod, err := ioutil.ReadFile(goModPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("could not read go.mod in revision %s: %v", rev, err)
+		}
+		if !bytes.Equal(origGoMod, newGoMod) {
+			goModUntidy = true
+			diagnostics = append(diagnostics, "go.mod is not tidy. Run 'go mod tidy'.")
+		}
+
+		newGoSum, err := ioutil.ReadFile(goSumPath)
+		if err != nil {
+			if haveOrigGoSum || !os.IsNotExist(err) {
+				return nil, nil, fmt.Errorf("could not read go.sum in revision %s: %v", rev, err)
+			}
+		} else if !haveOrigGoSum {
+			diagnostics = append(diagnostics, "go.sum is not committed to version control.")
+		} else if !bytes.Equal(origGoSum, newGoSum) && !goModUntidy {
+			diagnostics = append(diagnostics, "go.sum is missing one or more hashes. Run 'go mod tidy'.")
+		}
+	}
+
+	return pkgs, diagnostics, nil
 }
 
 type report struct {
 	modulePath                                                 string
 	baseVersion, releaseVersion, tagPrefix                     string
 	packages                                                   []PackageReport
+	diagnostics                                                []string
 	haveCompatibleChanges, haveIncompatibleChanges, haveErrors bool
 }
 
@@ -640,7 +689,9 @@ func (r *report) Text(w io.Writer) error {
 	}
 
 	var summary string
-	if r.releaseVersion != "" {
+	if len(r.diagnostics) > 0 {
+		summary = strings.Join(r.diagnostics, "\n")
+	} else if r.releaseVersion != "" {
 		if err := r.validateVersion(); err != nil {
 			summary = err.Error()
 		} else {
@@ -767,7 +818,7 @@ func (r *report) suggestVersion() string {
 // isSuccessful returns true if there were no incompatible changes or if
 // a new version could be released without changing the module path.
 func (r *report) isSuccessful() bool {
-	if r.haveErrors {
+	if r.haveErrors || len(r.diagnostics) > 0 {
 		return false
 	}
 	if r.releaseVersion != "" {

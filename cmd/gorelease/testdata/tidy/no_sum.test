@@ -1,0 +1,4 @@
+revision=no_sum
+success=0
+---
+go.sum is not committed to version control.
